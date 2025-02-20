@@ -10,31 +10,44 @@ Remove-Item -Path "C:\ProgramData\AnyDesk\*" -Recurse -Force -ErrorAction Silent
 # Aguarda um curto período antes de reiniciar o AnyDesk
 Start-Sleep -Seconds 2
 
-# Caminho do executável do AnyDesk
-$anydeskPath = "C:\Program Files (x86)\AnyDesk\AnyDesk.exe"
+# Caminhos possíveis do AnyDesk
+$anydeskPaths = @("C:\Program Files\AnyDesk\AnyDesk.exe", "C:\Program Files (x86)\AnyDesk\AnyDesk.exe")
 
-# Verifica se o arquivo existe antes de executar
-if (Test-Path $anydeskPath) {
-    Start-Process -FilePath $anydeskPath
-} else {
-    Write-Host "O arquivo AnyDesk.exe não foi encontrado em $anydeskPath"
+# Tenta executar o AnyDesk a partir dos caminhos conhecidos
+$anydeskFound = $false
+foreach ($path in $anydeskPaths) {
+    if (Test-Path $path) {
+        Write-Host "Iniciando AnyDesk em $path"
+        Start-Process -FilePath $path
+        $anydeskFound = $true
+        break
+    }
 }
 
-# Aguarda um curto período para garantir que os processos foram encerrados
+if (-not $anydeskFound) {
+    Write-Host "Nenhuma instalação do AnyDesk foi encontrada."
+}
+
+# Aguarda um curto período para garantir que os processos foram iniciados
 Start-Sleep -Seconds 5
 
-# Finaliza todos os processos do AnyDesk
+# Finaliza todos os processos do AnyDesk novamente
 Get-Process -Name "AnyDesk" -ErrorAction SilentlyContinue | Stop-Process -Force
 
 # Aguarda um curto período para garantir que os processos foram encerrados
 Start-Sleep -Seconds 2
 
-# Caminho do executável do AnyDesk
-$anydeskPath = "C:\Program Files (x86)\AnyDesk\AnyDesk.exe"
+# Reinicia o AnyDesk a partir do caminho encontrado
+$anydeskFound = $false
+foreach ($path in $anydeskPaths) {
+    if (Test-Path $path) {
+        Write-Host "Reiniciando AnyDesk em $path"
+        Start-Process -FilePath $path
+        $anydeskFound = $true
+        break
+    }
+}
 
-# Verifica se o arquivo existe antes de executar
-if (Test-Path $anydeskPath) {
-    Start-Process -FilePath $anydeskPath
-} else {
-    Write-Host "O arquivo AnyDesk.exe não foi encontrado em $anydeskPath"
+if (-not $anydeskFound) {
+    Write-Host "Nenhuma instalação do AnyDesk foi encontrada."
 }
