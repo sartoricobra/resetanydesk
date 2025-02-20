@@ -19,8 +19,15 @@ if (Test-Path $anydeskPath) {
 } else {
     Write-Host "O arquivo AnyDesk.exe não foi encontrado em $anydeskPath"
 }
+
+# Aguarda um curto período para garantir que os processos foram encerrados
+Start-Sleep -Seconds 5
+
 # Finaliza todos os processos do AnyDesk
 Get-Process -Name "AnyDesk" -ErrorAction SilentlyContinue | Stop-Process -Force
+
+# Aguarda um curto período para garantir que os processos foram encerrados
+Start-Sleep -Seconds 2
 
 # Caminho do executável do AnyDesk
 $anydeskPath = "C:\Program Files (x86)\AnyDesk\AnyDesk.exe"
