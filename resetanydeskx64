@@ -1,0 +1,40 @@
+# Finaliza todos os processos do AnyDesk
+Get-Process -Name "AnyDesk" -ErrorAction SilentlyContinue | Stop-Process -Force
+
+# Aguarda um curto período para garantir que os processos foram encerrados
+Start-Sleep -Seconds 2
+
+# Remove todos os arquivos e subpastas dentro de C:\ProgramData\AnyDesk
+Remove-Item -Path "C:\ProgramData\AnyDesk\*" -Recurse -Force -ErrorAction SilentlyContinue
+
+# Aguarda um curto período antes de reiniciar o AnyDesk
+Start-Sleep -Seconds 2
+
+# Caminho do executável do AnyDesk
+$anydeskPath = "C:\Program Files\AnyDesk\AnyDesk.exe"
+
+# Verifica se o arquivo existe antes de executar
+if (Test-Path $anydeskPath) {
+    Start-Process -FilePath $anydeskPath
+} else {
+    Write-Host "O arquivo AnyDesk.exe não foi encontrado em $anydeskPath"
+}
+
+# Aguarda um curto período para garantir que os processos foram encerrados
+Start-Sleep -Seconds 5
+
+# Finaliza todos os processos do AnyDesk
+Get-Process -Name "AnyDesk" -ErrorAction SilentlyContinue | Stop-Process -Force
+
+# Aguarda um curto período para garantir que os processos foram encerrados
+Start-Sleep -Seconds 2
+
+# Caminho do executável do AnyDesk
+$anydeskPath = "C:\Program Files\AnyDesk\AnyDesk.exe"
+
+# Verifica se o arquivo existe antes de executar
+if (Test-Path $anydeskPath) {
+    Start-Process -FilePath $anydeskPath
+} else {
+    Write-Host "O arquivo AnyDesk.exe não foi encontrado em $anydeskPath"
+}
