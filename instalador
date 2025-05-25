@@ -45,7 +45,7 @@ $apps = @{
         @{Nome="Cmake"; ID="Kitware.CMake"}
         @{Nome="MongoDB Server"; ID="MongoDB.Server"}
         @{Nome="MongoDB Tools"; ID="MongoDB.DatabaseTools"}
-        @(Nome="MSYS2"; ID="MSYS2.MSYS2"}
+        @{Nome="MSYS2"; ID="MSYS2.MSYS2"}
     )
     "Jogos" = @(
         @{Nome="Steam"; ID="Valve.Steam"}
