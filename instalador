@@ -35,7 +35,7 @@ $apps = @{
     "Desenvolvimento" = @(
         @{Nome="Visual Studio Code"; ID="Microsoft.VisualStudioCode"}
         @{Nome="Git"; ID="Git.Git"}
-        @{Nome="Python 3"; ID="Python.Python.3"}
+        @{Nome="Python 3"; ID="9NCVDN91XZQP"}
     )
     "Jogos" = @(
         @{Nome="Steam"; ID="Valve.Steam"}
