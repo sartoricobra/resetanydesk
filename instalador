@@ -52,7 +52,7 @@ $apps = @{
         @{Nome="Epic Games Launcher"; ID="EpicGames.EpicGamesLauncher"}
     )
     "Audio" = @(
-        @{Nome="Astro CC (Store)"; ID="9PFZ8RFZG5X4"} # Indicando que pode ser da Store
+        @{Nome="Astro Command Center"; ID="9PFZ8RFZG5X4"} # Indicando que pode ser da Store
     )
 }
 
