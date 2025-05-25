@@ -59,20 +59,63 @@ function Show-Menu {
     Write-Host "Pressione uma tecla para escolher a opcao:"
 }
 
-# Função que lista os aplicativos disponíveis para instalação, agrupados por categoria.
+# Função que lista os aplicativos disponíveis para instalação, agrupados por categoria, em 4 colunas.
 function List-Apps {
     $global:appIndexMap = @{}
-    $index = 1
+    $currentIndex = 1 # Índice sequencial para mapeamento e seleção
+
     $categoriasOrdenadas = $apps.Keys | Sort-Object
     foreach ($cat in $categoriasOrdenadas) {
         Write-Host ""
         Write-Host "--- Categoria: $cat ---" -ForegroundColor Yellow
-        $appsOrdenados = $apps[$cat] | Sort-Object Nome
-        foreach ($app in $appsOrdenados) {
-            $texto = "[{0:D2}] {1}" -f $index, $app.Nome
-            Write-Host ("  {0}" -f $texto) -ForegroundColor Cyan
-            $appIndexMap[$index] = $app.ID
-            $index++
+
+        $appsNestaCategoria = $apps[$cat] | Sort-Object Nome
+        
+        if ($appsNestaCategoria.Count -eq 0) {
+            Write-Host "  (Nenhum aplicativo nesta categoria)" -ForegroundColor Gray
+            continue 
+        }
+
+        # Coleta os itens formatados para exibição e preenche o mapa de índice
+        $appDisplayItems = New-Object System.Collections.Generic.List[string]
+        foreach ($app in $appsNestaCategoria) {
+            $textoFormatado = "[{0:D2}] {1}" -f $currentIndex, $app.Nome
+            $appDisplayItems.Add($textoFormatado)
+            $global:appIndexMap[$currentIndex] = $app.ID # Mapeia o índice sequencial para o ID do app
+            $currentIndex++
+        }
+
+        # Exibe os itens coletados em colunas
+        $numColumns = 4
+        $itemPaddingWidth = 30 # Largura padrão para cada coluna (ajuste conforme necessário)
+
+        # Tenta tornar a largura da coluna um pouco dinâmica com base na largura do console
+        try {
+            $consoleCurrentWidth = $Host.UI.RawUI.WindowSize.Width
+            if ($consoleCurrentWidth -ge ($numColumns * 15)) { # Heurística: mínimo de 15 caracteres por coluna
+                $itemPaddingWidth = [System.Math]::Floor($consoleCurrentWidth / $numColumns)
+                $itemPaddingWidth = [System.Math]::Max(20, $itemPaddingWidth - 1) # Mínimo de 20, e -1 para pequena margem
+            } else {
+                $itemPaddingWidth = 25 # Fallback se o console for muito estreito
+            }
+        } catch {
+            $itemPaddingWidth = 25 # Fallback se não conseguir obter a largura do console
+        }
+
+        for ($i = 0; $i -lt $appDisplayItems.Count; $i++) {
+            $itemText = $appDisplayItems[$i]
+            
+            # Se o texto do item for maior que a largura da coluna, ele vai estourar.
+            # Para um visual perfeito, seria necessário truncar o texto:
+            # if ($itemText.Length -gt $itemPaddingWidth) { $itemText = $itemText.Substring(0, [System.Math]::Min($itemText.Length, $itemPaddingWidth - 3)) + "..." }
+            # $itemText = $itemText.PadRight($itemPaddingWidth) # Re-aplica PadRight após truncar
+            
+            Write-Host -NoNewline ($itemText.PadRight($itemPaddingWidth)) -ForegroundColor Cyan
+
+            # Adiciona uma nova linha após cada $numColumns itens ou se for o último item da lista da categoria
+            if (((($i + 1) % $numColumns) -eq 0) -or ($i -eq ($appDisplayItems.Count - 1))) {
+                Write-Host "" 
+            }
         }
     }
 }
@@ -85,8 +128,8 @@ function Install-SelectedApps {
         return
     }
     foreach ($num in $selected) {
-        if ($appIndexMap.ContainsKey($num)) {
-            $id = $appIndexMap[$num]
+        if ($global:appIndexMap.ContainsKey($num)) { # Corrigido para usar $global:appIndexMap
+            $id = $global:appIndexMap[$num]         # Corrigido para usar $global:appIndexMap
             $appName = ($apps.GetEnumerator() | ForEach-Object { $_.Value } | Where-Object { $_.ID -eq $id } | Select-Object -First 1).Nome
             Write-Host "Instalando $appName ($id)..." -ForegroundColor Green
             
@@ -153,7 +196,7 @@ while ($true) {
                     continue
                 }
 
-                $userInputUpper = $userInputFromHost.Trim().ToUpper() # Adicionado .Trim()
+                $userInputUpper = $userInputFromHost.Trim().ToUpper() 
 
                 if ($userInputUpper -eq "Q") {
                     Write-Host "Instalacao cancelada. Retornando ao menu principal..." -ForegroundColor Yellow
@@ -191,19 +234,18 @@ while ($true) {
                     }
 
                     if ($numbersForDefaultSet.Count -gt 0) {
-                        Install-SelectedApps -selected ($numbersForDefaultSet.ToArray()) # Converte List[int] para int[]
+                        Install-SelectedApps -selected ($numbersForDefaultSet.ToArray()) 
                         Write-Host "`nInstalacao do conjunto padrao solicitada. Verifique o status acima." -ForegroundColor Green
                     } else {
                         Write-Warning "Nao foi possivel encontrar todos os aplicativos do conjunto padrao na lista atual."
                     }
-                    Write-Host "Voce pode selecionar mais aplicativos, ou digitar L, Q, Padrao." # Mensagem após Padrao
+                    Write-Host "Voce pode selecionar mais aplicativos, ou digitar L, Q, Padrao." 
                     Start-Sleep -Seconds 1
-                    continue # Volta para o prompt de entrada
+                    continue 
                 }
                 
-                # Se não for Q, L ou Padrao, tenta processar como números
                 $maxIndex = 0
-                if ($global:appIndexMap.Keys.Count -gt 0) { # Verifica se appIndexMap tem chaves
+                if ($global:appIndexMap.Keys.Count -gt 0) { 
                      $maxIndex = ($global:appIndexMap.Keys | ForEach-Object { [int]$_ } | Measure-Object -Maximum).Maximum
                 } else {
                     Write-Warning "Mapa de aplicativos esta vazio. Nao e possivel selecionar por numero."
@@ -212,51 +254,4 @@ while ($true) {
                 
                 $invalidEntries = New-Object System.Collections.ArrayList 
                 
-                [int[]]$numsToInstall = $userInputFromHost -split '\s+' | ForEach-Object {
-                    if ($_ -match '^\d+$') {
-                        $numVal = [int]$_
-                        if ($numVal -ge 1 -and $numVal -le $maxIndex) {
-                            $numVal 
-                        } else {
-                            [void]$invalidEntries.Add("$_ (fora do intervalo 1-$maxIndex)")
-                            $null 
-                        }
-                    } elseif (![string]::IsNullOrWhiteSpace($_)) { 
-                        [void]$invalidEntries.Add("$_ (nao e um numero)")
-                        $null 
-                    }
-                } | Where-Object { $_ -ne $null } | Get-Unique 
-
-                if ($invalidEntries.Count -gt 0) {
-                    Write-Warning "As seguintes entradas foram ignoradas: $($invalidEntries -join ', ')"
-                }
-
-                if ($numsToInstall.Length -eq 0) { # Alterado para .Length pois $numsToInstall é agora [int[]]
-                    if ($invalidEntries.Count -eq 0 -and ![string]::IsNullOrWhiteSpace($userInputFromHost)) {
-                        # Se não houve entradas inválidas reportadas mas nada foi selecionado E o usuário digitou algo
-                         Write-Warning "Nenhuma opcao numerica valida foi processada. Por favor, tente novamente."
-                    } elseif ([string]::IsNullOrWhiteSpace($userInputFromHost)) {
-                        Write-Warning "Nenhuma entrada detectada. Por favor, tente novamente."
-                    }
-                    # Se $invalidEntries.Count > 0, o aviso já foi dado.
-                    # Não precisa de sleep extra aqui, o loop continua.
-                } else {
-                    Install-SelectedApps -selected $numsToInstall
-                    Write-Host "`nInstalacao(oes) solicitada(s). Verifique o status acima." -ForegroundColor Green
-                    Write-Host "Digite mais numeros, L, Q ou Padrao." # Mensagem após instalação de números
-                }
-            } while ($true) 
-        }
-        "1" {
-            Run-Activator
-        }
-        "Q" {
-            Write-Host "`nSaindo..." -ForegroundColor Yellow
-            exit 
-        }
-        default {
-            Write-Warning "`nOpcao invalida, tente novamente."
-            Start-Sleep -Seconds 1
-        }
-    }
-}
+                [int[]]$numsToInstall = $userInputFromHost -split '\s+' | ForEach
