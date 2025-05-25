@@ -13,6 +13,7 @@ $apps = @{
     "Midia" = @(
         @{Nome="VLC"; ID="VideoLAN.VLC"} # Aplicativo do conjunto Padrao
         @{Nome="Spotify"; ID="Spotify.Spotify"}
+        @{Nome="Corel Draw"; ID="9PBL2KQXQ47K"}
     )
     "Seguranca" = @(
         @{Nome="WireGuard"; ID="WireGuard.WireGuard"}
@@ -24,24 +25,33 @@ $apps = @{
         @{Nome="7zip"; ID="7zip.7zip"}
         @{Nome="Microsoft Office"; ID="Microsoft.Office"} # Aplicativo do conjunto Padrao
         @{Nome="LibreOffice"; ID="TheDocumentFoundation.LibreOffice"}
+        @{Nome="Asana"; ID="Asana.Asana"}
+        @{Nome="Trello"; ID="9NBLGGH4XXVW"}
     )
     "Utilitarios" = @(
         @{Nome="TreeSize Free"; ID="XP9M26RSCLNT88"}
         @{Nome="PowerToys"; ID="Microsoft.PowerToys"}
         @{Nome="LGHUB"; ID="Logitech.LGHUB"}
         @{Nome="qBittorrent"; ID="qBittorrent.qBittorrent"}
-        @{Nome="WinDirStat"; ID="WinDirStat.WinDirStat"}
+        @{Nome="Chocolatey"; ID="Chocolatey.Chocolatey"}
+        @{Nome="AnyDesk"; ID="anydesk.anydesk"}
     )
     "Desenvolvimento" = @(
         @{Nome="Visual Studio Code"; ID="Microsoft.VisualStudioCode"}
         @{Nome="Git"; ID="Git.Git"}
         @{Nome="Python 3"; ID="9NCVDN91XZQP"}
+        @{Nome="Anaconda"; ID="Anaconda.Anaconda3"}
+        @{Nome="NodeJS"; ID="OpenJS.NodeJS"}
+        @{Nome="Cmake"; ID="Kitware.CMake"}
+        @{Nome="MongoDB Server"; ID="MongoDB.Server"}
+        @{Nome="MongoDB Tools"; ID="MongoDB.DatabaseTools"}
+        @(Nome="MSYS2"; ID="MSYS2.MSYS2"}
     )
     "Jogos" = @(
         @{Nome="Steam"; ID="Valve.Steam"}
         @{Nome="Epic Games Launcher"; ID="EpicGames.EpicGamesLauncher"}
     )
-    "Outros" = @(
+    "Audio" = @(
         @{Nome="Astro CC (Store)"; ID="9PFZ8RFZG5X4"} # Indicando que pode ser da Store
     )
 }
