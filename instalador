@@ -1,0 +1,262 @@
+# Define um dicionário ($apps) com categorias como chaves e listas de aplicativos como valores.
+# Cada aplicativo é representado por um objeto com propriedades Nome e ID (usada para instalar via winget).
+$apps = @{
+    "Comunicacao" = @(
+        @{Nome="WhatsApp"; ID="9NKSQGP7F2NH"} # ID da Microsoft Store para WhatsApp
+        @{Nome="Discord"; ID="Discord.Discord"}
+    )
+    "Navegador" = @(
+        @{Nome="Chrome"; ID="Google.Chrome"} # Aplicativo do conjunto Padrao
+        @{Nome="Brave"; ID="Brave.Brave"}
+        @{Nome="Firefox"; ID="Mozilla.Firefox"}
+    )
+    "Midia" = @(
+        @{Nome="VLC"; ID="VideoLAN.VLC"} # Aplicativo do conjunto Padrao
+        @{Nome="Spotify"; ID="Spotify.Spotify"}
+    )
+    "Seguranca" = @(
+        @{Nome="WireGuard"; ID="WireGuard.WireGuard"}
+        @{Nome="Malwarebytes"; ID="Malwarebytes.Malwarebytes"}
+    )
+    "Produtividade" = @(
+        @{Nome="OneDrive"; ID="Microsoft.OneDrive"}
+        @{Nome="Notepad++"; ID="Notepad++.Notepad++"}
+        @{Nome="7zip"; ID="7zip.7zip"}
+        @{Nome="Microsoft Office"; ID="Microsoft.Office"} # Aplicativo do conjunto Padrao
+        @{Nome="LibreOffice"; ID="TheDocumentFoundation.LibreOffice"}
+    )
+    "Utilitarios" = @(
+        @{Nome="TreeSize Free"; ID="JAMSoftware.TreeSizeFree"}
+        @{Nome="PowerToys"; ID="Microsoft.PowerToys"}
+        @{Nome="LGHUB"; ID="Logitech.LGHUB"}
+        @{Nome="qBittorrent"; ID="qBittorrent.qBittorrent"}
+        @{Nome="WinDirStat"; ID="WinDirStat.WinDirStat"}
+    )
+    "Desenvolvimento" = @(
+        @{Nome="Visual Studio Code"; ID="Microsoft.VisualStudioCode"}
+        @{Nome="Git"; ID="Git.Git"}
+        @{Nome="Python 3"; ID="Python.Python.3"}
+    )
+    "Jogos" = @(
+        @{Nome="Steam"; ID="Valve.Steam"}
+        @{Nome="Epic Games Launcher"; ID="EpicGames.EpicGamesLauncher"}
+    )
+    "Outros" = @(
+        @{Nome="Astro CC (Store)"; ID="9PFZ8RFZG5X4"} # Indicando que pode ser da Store
+    )
+}
+
+# Função que exibe o menu principal para o usuário.
+function Show-Menu {
+    Clear-Host
+    Write-Host "============================"
+    Write-Host "       MENU PRINCIPAL       "
+    Write-Host "============================"
+    Write-Host "[0] Instalar programas"
+    Write-Host "[1] Rodar ativador"
+    Write-Host "[Q] Sair"
+    Write-Host "============================"
+    Write-Host "Pressione uma tecla para escolher a opcao:"
+}
+
+# Função que lista os aplicativos disponíveis para instalação, agrupados por categoria.
+function List-Apps {
+    $global:appIndexMap = @{}
+    $index = 1
+    $categoriasOrdenadas = $apps.Keys | Sort-Object
+    foreach ($cat in $categoriasOrdenadas) {
+        Write-Host ""
+        Write-Host "--- Categoria: $cat ---" -ForegroundColor Yellow
+        $appsOrdenados = $apps[$cat] | Sort-Object Nome
+        foreach ($app in $appsOrdenados) {
+            $texto = "[{0:D2}] {1}" -f $index, $app.Nome
+            Write-Host ("  {0}" -f $texto) -ForegroundColor Cyan
+            $appIndexMap[$index] = $app.ID
+            $index++
+        }
+    }
+}
+
+# Função que instala os aplicativos selecionados via winget.
+function Install-SelectedApps {
+    param([int[]]$selected)
+    if (-not $selected -or $selected.Count -eq 0) {
+        Write-Warning "Nenhum numero valido selecionado para instalacao."
+        return
+    }
+    foreach ($num in $selected) {
+        if ($appIndexMap.ContainsKey($num)) {
+            $id = $appIndexMap[$num]
+            $appName = ($apps.GetEnumerator() | ForEach-Object { $_.Value } | Where-Object { $_.ID -eq $id } | Select-Object -First 1).Nome
+            Write-Host "Instalando $appName ($id)..." -ForegroundColor Green
+            
+            $wingetArgs = @("install", "--id", $id, "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity")
+
+            if (($id -match "^\w{12}$") -and ($id -ne "Microsoft.Office")) { # Heurística para IDs da Store
+                $wingetArgs += "--source", "msstore"
+                Write-Host "Usando fonte msstore para $appName ($id)" -ForegroundColor DarkCyan
+            }
+            
+            Write-Host "Comando: winget $($wingetArgs -join ' ')" -ForegroundColor DarkGray
+            $processInfo = Start-Process winget -ArgumentList $wingetArgs -Wait -PassThru -NoNewWindow
+            
+            if ($processInfo.ExitCode -ne 0) {
+                Write-Warning "Falha ao instalar $appName ($id). Código de saída: $($processInfo.ExitCode)"
+            } else {
+                Write-Host "$appName instalado com sucesso." -ForegroundColor Green
+            }
+        } else {
+            Write-Warning "Opcao $num invalida."
+        }
+    }
+}
+
+# Função que executa um ativador.
+function Run-Activator {
+    Write-Host "Executando ativador via PowerShell..." -ForegroundColor Yellow
+    try {
+        Invoke-RestMethod -Uri "https://get.activated.win" | Invoke-Expression
+        Write-Host "Comando do ativador concluido." -ForegroundColor Green
+    } catch {
+        Write-Error "Falha ao executar o ativador: $($_.Exception.Message)"
+    }
+    Write-Host "Pressione qualquer tecla para continuar..."
+    [void][System.Console]::ReadKey($true)
+}
+
+# Loop principal do script.
+while ($true) {
+    Show-Menu
+    $key = [System.Console]::ReadKey($true)
+    $keyChar = $key.KeyChar.ToString().Trim().ToUpper()
+
+    switch ($keyChar) {
+        "0" {
+            Clear-Host
+            Write-Host "Lista de programas disponiveis para instalacao:" -ForegroundColor Magenta
+            List-Apps
+
+            do {
+                Write-Host ""
+                Write-Host "Digite os numeros dos programas (separados por espaco)," -ForegroundColor White
+                Write-Host "ou uma das seguintes opcoes:" -ForegroundColor White
+                Write-Host "  [L]      Listar os programas novamente" -ForegroundColor Cyan
+                Write-Host "  [Q]      Cancelar e voltar ao menu principal" -ForegroundColor Cyan
+                Write-Host "  [Padrao] Instalar o conjunto padrao (Chrome, VLC, Office)" -ForegroundColor Cyan
+                Write-Host "Digite a selecao e pressione ENTER:" -ForegroundColor White
+
+                $userInputFromHost = Read-Host 
+
+                if ($userInputFromHost -eq $null) { 
+                    Write-Warning "Nenhuma entrada detectada. Tente novamente ou digite L, Q ou Padrao."
+                    Start-Sleep -Seconds 1
+                    continue
+                }
+
+                $userInputUpper = $userInputFromHost.Trim().ToUpper() # Adicionado .Trim()
+
+                if ($userInputUpper -eq "Q") {
+                    Write-Host "Instalacao cancelada. Retornando ao menu principal..." -ForegroundColor Yellow
+                    Start-Sleep -Seconds 1
+                    break 
+                }
+
+                if ($userInputUpper -eq "L") {
+                    Clear-Host
+                    Write-Host "Lista de programas disponiveis para instalacao:" -ForegroundColor Magenta
+                    List-Apps
+                    continue 
+                }
+
+                if ($userInputUpper -eq "PADRAO") {
+                    Write-Host "`nIniciando instalacao do conjunto padrao (Chrome, VLC, Microsoft Office)..." -ForegroundColor Green
+                    $defaultAppNamesToInstall = @("Chrome", "VLC", "Microsoft Office") 
+                    $numbersForDefaultSet = New-Object System.Collections.Generic.List[int]
+
+                    if ($global:appIndexMap.Count -gt 0) {
+                        foreach ($displayIndexKey in ($global:appIndexMap.Keys | Sort-Object {[int]$_})) {
+                            $appIDFromMap = $global:appIndexMap[$displayIndexKey]
+                            $currentAppNameFromMap = $null
+                            foreach($categoryKeyGlobal in $apps.Keys){
+                                $foundAppGlobal = $apps[$categoryKeyGlobal] | Where-Object {$_.ID -eq $appIDFromMap} | Select-Object -First 1
+                                if($foundAppGlobal){
+                                    $currentAppNameFromMap = $foundAppGlobal.Nome
+                                    break
+                                }
+                            }
+                            if($currentAppNameFromMap -and ($defaultAppNamesToInstall -contains $currentAppNameFromMap)){
+                                $numbersForDefaultSet.Add([int]$displayIndexKey)
+                            }
+                        }
+                    }
+
+                    if ($numbersForDefaultSet.Count -gt 0) {
+                        Install-SelectedApps -selected ($numbersForDefaultSet.ToArray()) # Converte List[int] para int[]
+                        Write-Host "`nInstalacao do conjunto padrao solicitada. Verifique o status acima." -ForegroundColor Green
+                    } else {
+                        Write-Warning "Nao foi possivel encontrar todos os aplicativos do conjunto padrao na lista atual."
+                    }
+                    Write-Host "Voce pode selecionar mais aplicativos, ou digitar L, Q, Padrao." # Mensagem após Padrao
+                    Start-Sleep -Seconds 1
+                    continue # Volta para o prompt de entrada
+                }
+                
+                # Se não for Q, L ou Padrao, tenta processar como números
+                $maxIndex = 0
+                if ($global:appIndexMap.Keys.Count -gt 0) { # Verifica se appIndexMap tem chaves
+                     $maxIndex = ($global:appIndexMap.Keys | ForEach-Object { [int]$_ } | Measure-Object -Maximum).Maximum
+                } else {
+                    Write-Warning "Mapa de aplicativos esta vazio. Nao e possivel selecionar por numero."
+                    continue
+                }
+                
+                $invalidEntries = New-Object System.Collections.ArrayList 
+                
+                [int[]]$numsToInstall = $userInputFromHost -split '\s+' | ForEach-Object {
+                    if ($_ -match '^\d+$') {
+                        $numVal = [int]$_
+                        if ($numVal -ge 1 -and $numVal -le $maxIndex) {
+                            $numVal 
+                        } else {
+                            [void]$invalidEntries.Add("$_ (fora do intervalo 1-$maxIndex)")
+                            $null 
+                        }
+                    } elseif (![string]::IsNullOrWhiteSpace($_)) { 
+                        [void]$invalidEntries.Add("$_ (nao e um numero)")
+                        $null 
+                    }
+                } | Where-Object { $_ -ne $null } | Get-Unique 
+
+                if ($invalidEntries.Count -gt 0) {
+                    Write-Warning "As seguintes entradas foram ignoradas: $($invalidEntries -join ', ')"
+                }
+
+                if ($numsToInstall.Length -eq 0) { # Alterado para .Length pois $numsToInstall é agora [int[]]
+                    if ($invalidEntries.Count -eq 0 -and ![string]::IsNullOrWhiteSpace($userInputFromHost)) {
+                        # Se não houve entradas inválidas reportadas mas nada foi selecionado E o usuário digitou algo
+                         Write-Warning "Nenhuma opcao numerica valida foi processada. Por favor, tente novamente."
+                    } elseif ([string]::IsNullOrWhiteSpace($userInputFromHost)) {
+                        Write-Warning "Nenhuma entrada detectada. Por favor, tente novamente."
+                    }
+                    # Se $invalidEntries.Count > 0, o aviso já foi dado.
+                    # Não precisa de sleep extra aqui, o loop continua.
+                } else {
+                    Install-SelectedApps -selected $numsToInstall
+                    Write-Host "`nInstalacao(oes) solicitada(s). Verifique o status acima." -ForegroundColor Green
+                    Write-Host "Digite mais numeros, L, Q ou Padrao." # Mensagem após instalação de números
+                }
+            } while ($true) 
+        }
+        "1" {
+            Run-Activator
+        }
+        "Q" {
+            Write-Host "`nSaindo..." -ForegroundColor Yellow
+            exit 
+        }
+        default {
+            Write-Warning "`nOpcao invalida, tente novamente."
+            Start-Sleep -Seconds 1
+        }
+    }
+}
