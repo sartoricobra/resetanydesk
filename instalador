@@ -26,7 +26,7 @@ $apps = @{
         @{Nome="LibreOffice"; ID="TheDocumentFoundation.LibreOffice"}
     )
     "Utilitarios" = @(
-        @{Nome="TreeSize Free"; ID="JAMSoftware.TreeSizeFree"}
+        @{Nome="TreeSize Free"; ID="XP9M26RSCLNT88"}
         @{Nome="PowerToys"; ID="Microsoft.PowerToys"}
         @{Nome="LGHUB"; ID="Logitech.LGHUB"}
         @{Nome="qBittorrent"; ID="qBittorrent.qBittorrent"}
