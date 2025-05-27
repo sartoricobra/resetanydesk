@@ -238,8 +238,8 @@ while ($true) {
                 }
 
                 if ($userInputUpper -eq "PADRAO") {
-                    Write-Host "`nIniciando instalacao do conjunto padrao (Chrome, VLC, Microsoft Office)..." -ForegroundColor Green
-                    $defaultAppNamesToInstall = @("Chrome", "VLC", "Microsoft Office") 
+                    Write-Host "`nIniciando instalacao do conjunto padrao (Chrome, VLC, Microsoft Office, Anydesk)..." -ForegroundColor Green
+                    $defaultAppNamesToInstall = @("Chrome", "VLC", "Microsoft Office", "AnyDesk") 
                     $numbersForDefaultSet = New-Object System.Collections.Generic.List[int]
 
                     if ($global:appIndexMap.Count -gt 0) {
