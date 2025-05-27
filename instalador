@@ -10,10 +10,11 @@ $apps = @{
         @{Nome="Brave"; ID="Brave.Brave"}
         @{Nome="Firefox"; ID="Mozilla.Firefox"}
     )
-    "Midia" = @(
+    "Entreternimento" = @(
         @{Nome="VLC"; ID="VideoLAN.VLC"} # Aplicativo do conjunto Padrao
         @{Nome="Spotify"; ID="Spotify.Spotify"}
         @{Nome="Corel Draw"; ID="9PBL2KQXQ47K"}
+        @{Nome="Stremio"; ID="Stremio.Stremio"}
     )
     "Seguranca" = @(
         @{Nome="WireGuard"; ID="WireGuard.WireGuard"}
@@ -35,6 +36,7 @@ $apps = @{
         @{Nome="qBittorrent"; ID="qBittorrent.qBittorrent"}
         @{Nome="Chocolatey"; ID="Chocolatey.Chocolatey"}
         @{Nome="AnyDesk"; ID="anydesk.anydesk"}
+        @{Nome="Teamviewer"; ID="XPDM17HK323C4X"}
     )
     "Desenvolvimento" = @(
         @{Nome="Visual Studio Code"; ID="Microsoft.VisualStudioCode"}
