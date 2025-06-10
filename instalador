@@ -7,178 +7,131 @@ if (-not $isAdmin) {
     # 2. Se NAO for admin, inicia o processo de auto-elevacao.
     $scriptPath = $MyInvocation.MyCommand.Path
     $arguments = "-NoProfile -ExecutionPolicy Bypass"
-
-    if (-not [string]::IsNullOrEmpty($scriptPath)) {
-        $arguments += " -File `"$scriptPath`""
-    }
+    if (-not [string]::IsNullOrEmpty($scriptPath)) { $arguments += " -File `"$scriptPath`"" }
     else {
         $tempScriptPath = Join-Path $env:TEMP ([System.Guid]::NewGuid().ToString() + ".ps1")
-        $scriptContent = $MyInvocation.MyCommand.Definition
-        $scriptContent | Out-File -FilePath $tempScriptPath -Encoding utf8
+        $MyInvocation.MyCommand.Definition | Out-File -FilePath $tempScriptPath -Encoding utf8
         $arguments += " -File `"$tempScriptPath`""
     }
-
     Write-Warning "Permissao de administrador necessaria. Reiniciando o script com elevacao..."
     Start-Process powershell.exe -ArgumentList $arguments -Verb RunAs
-    
-    # 3. Fecha a janela atual
     exit
 }
 #endregion
 
-### O SCRIPT PRINCIPAL AGORA RODA DENTRO DE UM BLOCO TRY/FINALLY ###
+# Força o uso do protocolo de segurança TLS 1.2 para todas as conexões web
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
 try {
     #region INFO
     <#
     .SYNOPSIS
-        Instalador de aplicativos e utilitario de sistema com interface grafica (GUI).
+        Instalador de aplicativos e utilitarios de sistema com interface grafica (GUI).
     .DESCRIPTION
-        Usa botoes clicaveis e inclui uma funcao para baixar e instalar o driver da NVIDIA.
+        Versao final com instaladores de driver NVIDIA, AMD Graphics e AMD Chipset.
     .AUTHOR
         Adaptado por Gemini
     .VERSION
-        7.0 (Integracao com Instalador de Driver NVIDIA)
+        12.0 (Recurso Final: Instalador de Chipset AMD)
     #>
     #endregion
 
-    ### FUNCAO DO DRIVER NVIDIA ###
-    #region Function Get-NvidiaDriver
-    function Get-NvidiaDriver {
+    #region Helper Functions
+    
+    function Invoke-NvidiaDriverInstall {
         [CmdletBinding()]
-        param (
-            [string]$DownloadPath = "$env:USERPROFILE\Downloads",
-            [string]$DriverType = "Game Ready",
-            [switch]$InstallSilently
-        )
+        param()
+        Write-Output "--- INICIANDO PROCESSO DE ATUALIZACAO DE DRIVER NVIDIA VIA CHOCOLATEY ---"
+        Write-Output "[1/3] Verificando se o Chocolatey esta instalado..."
+        if (-not (Get-Command choco.exe -ErrorAction SilentlyContinue)) {
+            Write-Output "   Chocolatey nao encontrado. Iniciando instalacao silenciosa..."
+            try {
+                Set-ExecutionPolicy Bypass -Scope Process -Force; [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+                Start-Sleep -Seconds 5
+                if (-not (Get-Command choco.exe -ErrorAction SilentlyContinue)) { Write-Output "ERRO: A instalacao do Chocolatey parece ter falhado."; return }
+                Write-Output "   Chocolatey instalado com sucesso!"
+            } catch { Write-Output "ERRO: Falha critica durante a instalacao do Chocolatey. Detalhes: $($_.Exception.Message)"; return }
+        } else { Write-Output "   Chocolatey ja esta instalado." }
 
-        Log-Message "--- Iniciando busca por driver da NVIDIA ---"
-
-        Log-Message "[1/5] Identificando a GPU NVIDIA instalada..."
+        Write-Output "[2/3] Executando o comando para instalar o driver NVIDIA..."
         try {
-            $gpu = Get-CimInstance -ClassName Win32_VideoController | Where-Object { $_.Name -like '*NVIDIA*' } | Select-Object -First 1
-            if (-not $gpu) {
-                Log-Message "ERRO: Nenhuma placa de video NVIDIA foi encontrada neste sistema."
-                return
-            }
-            $gpuName = $gpu.Name.Replace("NVIDIA ", "")
-            Log-Message "   GPU Encontrada: $gpuName"
-        }
-        catch {
-            Log-Message "ERRO: Falha ao obter informacoes da GPU. Verifique se o WMI esta funcionando corretamente."
-            return
-        }
+            & choco install nvidia-display-driver -y *>&1 | ForEach-Object { Write-Output "  $_" }
+            if ($LASTEXITCODE -ne 0) { Write-Warning "O processo do Chocolatey terminou com o codigo de saida: $LASTEXITCODE."}
+            else { Write-Output "Driver NVIDIA instalado/atualizado com sucesso!" }
+        } catch { Write-Output "ERRO: Falha ao executar o comando do Chocolatey. Detalhes: $($_.Exception.Message)" }
+        Write-Output "[3/3] Processo de instalacao do driver NVIDIA concluido."
+    }
 
-        Log-Message "[2/5] Buscando o driver mais recente no site da NVIDIA..."
-        $driverSearchUrl = "https://www.nvidia.com/Download/Find.aspx?lang=en-us"
-        
+    function Invoke-AmdChipsetDriverInstall {
+        [CmdletBinding()]
+        param()
+        Write-Output "--- INICIANDO PROCESSO DE INSTALACAO DO CHIPSET AMD VIA CHOCOLATEY ---"
+        Write-Output "[1/3] Verificando se o Chocolatey esta instalado..."
+        if (-not (Get-Command choco.exe -ErrorAction SilentlyContinue)) {
+            Write-Output "   Chocolatey nao encontrado. Iniciando instalacao silenciosa..."
+            try {
+                Set-ExecutionPolicy Bypass -Scope Process -Force; [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+                Start-Sleep -Seconds 5
+                if (-not (Get-Command choco.exe -ErrorAction SilentlyContinue)) { Write-Output "ERRO: A instalacao do Chocolatey parece ter falhado."; return }
+                Write-Output "   Chocolatey instalado com sucesso!"
+            } catch { Write-Output "ERRO: Falha critica durante a instalacao do Chocolatey. Detalhes: $($_.Exception.Message)"; return }
+        } else { Write-Output "   Chocolatey ja esta instalado." }
+
+        Write-Output "[2/3] Executando o comando para instalar o chipset AMD..."
         try {
-            $searchResponse = Invoke-RestMethod -Uri $driverSearchUrl -Method Post -Body @{
-                "pf"  = "1"; "q" = $gpuName; "d" = if ($DriverType -eq "Game Ready") { "1" } else { "2" }
-            }
-        }
-        catch {
-            Log-Message "ERRO: Falha ao conectar ao site da NVIDIA. Verifique sua conexao com a internet."
-            return
-        }
+            & choco install amd-ryzen-chipset -y *>&1 | ForEach-Object { Write-Output "  $_" }
+            if ($LASTEXITCODE -ne 0) { Write-Warning "O processo do Chocolatey terminou com o codigo de saida: $LASTEXITCODE."}
+            else { Write-Output "Driver de Chipset AMD instalado/atualizado com sucesso!" }
+        } catch { Write-Output "ERRO: Falha ao executar o comando do Chocolatey. Detalhes: $($_.Exception.Message)" }
+        Write-Output "[3/3] Processo de instalacao do chipset AMD concluido."
+    }
 
-        Log-Message "[3/5] Analisando resultados da busca..."
-        $latestDriver = $searchResponse.drivers | Sort-Object version -Descending | Select-Object -First 1
-        
-        if (-not $latestDriver) {
-            Log-Message "ERRO: Nenhum driver encontrado para '$gpuName'."
-            return
-        }
-        
-        $driverDetailsUrl = "https://www.nvidia.com" + $latestDriver.download_url
-        Log-Message "  Pagina de detalhes do driver encontrada."
-        Log-Message "  Versao: $($latestDriver.version)"
-        Log-Message "  Data de Lancamento: $($latestDriver.release_date)"
+    function Invoke-AmdGpuSoftwareInstall {
+        [CmdletBinding()]
+        param()
+        Write-Output "--- INICIANDO PROCESSO DE ATUALIZACAO DE SOFTWARE AMD GPU VIA WINGET ---"
+        $PackageId = "AMD.AMDSoftwareCloudEdition"
 
-        Log-Message "[4/5] Extraindo o link de download final..."
+        Write-Output "[1/2] Verificando o pacote '$PackageId' no repositorio Winget..."
         try {
-            $detailsPageHtml = Invoke-RestMethod -Uri $driverDetailsUrl -Method Get
-            $downloadLinkRegex = 'href="(.+?\.exe)"'
-            if ($detailsPageHtml -match $downloadLinkRegex) {
-                $finalDownloadUrl = $matches[1]
-                Log-Message "  Link de download extraido com sucesso!"
-            }
-            else {
-                Log-Message "ERRO: Nao foi possivel encontrar o link de download do .exe na pagina de detalhes."
-                return
-            }
-        }
-        catch {
-            Log-Message "ERRO: Falha ao acessar a pagina de detalhes do driver."
-            return
-        }
+            $searchResult = winget search --id $PackageId *>&1
+            if ($searchResult -match "No package found matching input criteria.") { Write-Output "ERRO: O pacote de software '$PackageId' nao foi encontrado."; return }
+            Write-Output "   Pacote de software encontrado com sucesso!"
+        } catch { Write-Output "ERRO: Falha ao executar o comando 'winget'."; return }
 
-        $fileName = Split-Path $finalDownloadUrl -Leaf
-        $destinationPath = Join-Path $DownloadPath $fileName
-        
-        Log-Message "[5/5] Baixando o driver para '$destinationPath'..."
-        Log-Message "  URL: $finalDownloadUrl"
-        Log-Message "  Isso pode levar varios minutos..."
-        
+        Write-Output "[2/2] Iniciando o download e a instalacao via Winget..."
+        $wingetArgs = "install --id $PackageId --exact --source winget --accept-package-agreements --accept-source-agreements --disable-interactivity --no-progress"
         try {
-            Import-Module BitsTransfer
-            Start-BitsTransfer -Source $finalDownloadUrl -Destination $destinationPath -DisplayName "NVIDIA Driver Download" -Asynchronous
-        }
-        catch {
-            Log-Message "ERRO: Falha no download. Verifique se o servico BITS esta ativo."
-            return
-        }
-        
-        # O monitoramento do BITS será feito pelo timer principal
-        return $destinationPath # Retorna o caminho do arquivo para o instalador
+            $process = Start-Process winget -ArgumentList $wingetArgs -Wait -PassThru -NoNewWindow
+            if ($process.ExitCode -eq 0) { Write-Output "Software AMD GPU instalado/atualizado com sucesso!" }
+            else { Write-Output "AVISO: O processo do Winget terminou com o codigo de saida: $($process.ExitCode)." }
+        } catch { Write-Output "ERRO: Falha ao iniciar o processo de instalacao do Winget. Detalhes: $($_.Exception.Message)" }
+    }
+
+    function Log-Message {
+        param($Message)
+        if ($logTextBox.InvokeRequired) { $logTextBox.Invoke([Action[string]]$logTextBox.AppendText, "$Message`r`n") } 
+        else { $logTextBox.AppendText("$Message`r`n") }
     }
     #endregion
 
     $PSDefaultParameterValues['*:Encoding'] = 'utf8'
-    
     $script:installJob = $null
     $script:installQueue = [System.Collections.Generic.Queue[object]]::new()
 
-    #region GUI - Criacao da Interface Grafica com Windows Forms
-
-    Add-Type -AssemblyName System.Windows.Forms
-    Add-Type -AssemblyName System.Drawing
-
-    $defaultButtonColor = [System.Drawing.Color]::WhiteSmoke
-    $selectedButtonColor = [System.Drawing.Color]::FromArgb(204, 255, 204)
-    $selectedButtonBorderColor = [System.Drawing.Color]::DarkGreen
+    #region GUI
+    Add-Type -AssemblyName System.Windows.Forms; Add-Type -AssemblyName System.Drawing
+    $defaultButtonColor = [System.Drawing.Color]::WhiteSmoke; $selectedButtonColor = [System.Drawing.Color]::FromArgb(204, 255, 204); $selectedButtonBorderColor = [System.Drawing.Color]::DarkGreen
     
-    $mainForm = New-Object System.Windows.Forms.Form
-    $mainForm.Text = 'Pos Instalador de Aplicativos (Executando como Administrador)'
-    $mainForm.Size = New-Object System.Drawing.Size(850, 950)
-    $mainForm.StartPosition = 'CenterScreen'
-    $mainForm.FormBorderStyle = 'FixedSingle'
-    $mainForm.MaximizeBox = $false
-
+    $mainForm = New-Object System.Windows.Forms.Form; $mainForm.Text = 'Pos Instalador de Aplicativos (Executando como Administrador)'; $mainForm.Size = New-Object System.Drawing.Size(850, 950); $mainForm.StartPosition = 'CenterScreen'; $mainForm.FormBorderStyle = 'FixedSingle'; $mainForm.MaximizeBox = $false
     $mainPanel = New-Object System.Windows.Forms.Panel; $mainPanel.Location = New-Object System.Drawing.Point(20, 20); $mainPanel.Size = New-Object System.Drawing.Size(790, 500); $mainPanel.AutoScroll = $true; $mainPanel.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle; $mainForm.Controls.Add($mainPanel)
-    
-    ### MUDANÇA DE LAYOUT: Painel de ações dividido em dois ###
     $actionPanel = New-Object System.Windows.Forms.Panel; $actionPanel.Location = New-Object System.Drawing.Point(20, 530); $actionPanel.Size = New-Object System.Drawing.Size(790, 45); $mainForm.Controls.Add($actionPanel)
     $specialTasksPanel = New-Object System.Windows.Forms.Panel; $specialTasksPanel.Location = New-Object System.Drawing.Point(20, 575); $specialTasksPanel.Size = New-Object System.Drawing.Size(790, 45); $mainForm.Controls.Add($specialTasksPanel)
-
     $logLabel = New-Object System.Windows.Forms.Label; $logLabel.Text = "Log de Instalacao:"; $logLabel.Location = New-Object System.Drawing.Point(20, 625); $logLabel.AutoSize = $true; $mainForm.Controls.Add($logLabel)
     $logTextBox = New-Object System.Windows.Forms.TextBox; $logTextBox.Location = New-Object System.Drawing.Point(20, 645); $logTextBox.Size = New-Object System.Drawing.Size(790, 240); $logTextBox.Multiline = $true; $logTextBox.ScrollBars = 'Vertical'; $logTextBox.ReadOnly = $true; $logTextBox.Font = New-Object System.Drawing.Font('Consolas', 8); $mainForm.Controls.Add($logTextBox)
     
-    function Log-Message { param($Message); if ($logTextBox.InvokeRequired) { $logTextBox.Invoke([Action[string]]$logTextBox.AppendText, "$Message`r`n") } else { $logTextBox.AppendText("$Message`r`n") } }
+    $apps = @{ "Comunicacao" = @( @{Nome="WhatsApp"; ID="9NKSQGP7F2NH"; IsDefault=$false}, @{Nome="Discord"; ID="Discord.Discord"; IsDefault=$false} ); "Navegador" = @( @{Nome="Chrome"; ID="Google.Chrome"; IsDefault=$true}, @{Nome="Brave"; ID="Brave.Brave"; IsDefault=$false}, @{Nome="Firefox"; ID="Mozilla.Firefox"; IsDefault=$false} ); "Entretenimento" = @( @{Nome="VLC"; ID="VideoLAN.VLC"; IsDefault=$true}, @{Nome="Spotify"; ID="Spotify.Spotify"; IsDefault=$false}, @{Nome="Corel Draw"; ID="9PBL2KQXQ47K"; IsDefault=$false}, @{Nome="Stremio"; ID="Stremio.Stremio"; IsDefault=$false} ); "Seguranca" = @( @{Nome="WireGuard"; ID="WireGuard.WireGuard"; IsDefault=$false}, @{Nome="Malwarebytes"; ID="Malwarebytes.Malwarebytes"; IsDefault=$false} ); "Produtividade" = @( @{Nome="OneDrive"; ID="Microsoft.OneDrive"; IsDefault=$false}, @{Nome="Notepad++"; ID="Notepad++.Notepad++"; IsDefault=$false}, @{Nome="7zip"; ID="7zip.7zip"; IsDefault=$false}, @{Nome="Microsoft Office"; ID="Microsoft.Office"; IsDefault=$true}, @{Nome="LibreOffice"; ID="TheDocumentFoundation.LibreOffice"; IsDefault=$false}, @{Nome="Asana"; ID="Asana.Asana"; IsDefault=$false}, @{Nome="Trello"; ID="9NBLGGH4XXVW"; IsDefault=$false} ); "Utilitarios" = @( @{Nome="TreeSize Free"; ID="XP9M26RSCLNT88"; IsDefault=$false}, @{Nome="PowerToys"; ID="Microsoft.PowerToys"; IsDefault=$false}, @{Nome="LGHUB"; ID="Logitech.LGHUB"; IsDefault=$false}, @{Nome="qBittorrent"; ID="qBittorrent.qBittorrent"; IsDefault=$false}, @{Nome="Chocolatey"; ID="Chocolatey.Chocolatey"; IsDefault=$false}, @{Nome="AnyDesk"; ID="anydesk.anydesk"; IsDefault=$true}, @{Nome="Teamviewer"; ID="XPDM17HK323C4X"; IsDefault=$false} ); "Desenvolvimento" = @( @{Nome="Visual Studio Code"; ID="Microsoft.VisualStudioCode"; IsDefault=$false}, @{Nome="Git"; ID="Git.Git"; IsDefault=$false}, @{Nome="Python 3"; ID="9NCVDN91XZQP"; IsDefault=$false}, @{Nome="Anaconda"; ID="Anaconda.Anaconda3"; IsDefault=$false}, @{Nome="NodeJS"; ID="OpenJS.NodeJS"; IsDefault=$false}, @{Nome="Cmake"; ID="Kitware.CMake"; IsDefault=$false}, @{Nome="MongoDB Server"; ID="MongoDB.Server"; IsDefault=$false}, @{Nome="MongoDB Tools"; ID="MongoDB.DatabaseTools"; IsDefault=$false}, @{Nome="MSYS2"; ID="MSYS2.MSYS2"; IsDefault=$false} ); "Jogos" = @( @{Nome="Steam"; ID="Valve.Steam"; IsDefault=$false}, @{Nome="Epic Games Launcher"; ID="EpicGames.EpicGamesLauncher"; IsDefault=$false} ); "Audio" = @( @{Nome="Astro Command Center"; ID="9PFZ8RFZG5X4"; IsDefault=$false} ) }
     
-    # ... (código de definição dos $apps permanece o mesmo)
-    $apps = @{
-        "Comunicacao" = @( @{Nome="WhatsApp"; ID="9NKSQGP7F2NH"; IsDefault=$false}, @{Nome="Discord"; ID="Discord.Discord"; IsDefault=$false} );
-        "Navegador" = @( @{Nome="Chrome"; ID="Google.Chrome"; IsDefault=$true}, @{Nome="Brave"; ID="Brave.Brave"; IsDefault=$false}, @{Nome="Firefox"; ID="Mozilla.Firefox"; IsDefault=$false} );
-        "Entretenimento" = @( @{Nome="VLC"; ID="VideoLAN.VLC"; IsDefault=$true}, @{Nome="Spotify"; ID="Spotify.Spotify"; IsDefault=$false}, @{Nome="Corel Draw"; ID="9PBL2KQXQ47K"; IsDefault=$false}, @{Nome="Stremio"; ID="Stremio.Stremio"; IsDefault=$false} );
-        "Seguranca" = @( @{Nome="WireGuard"; ID="WireGuard.WireGuard"; IsDefault=$false}, @{Nome="Malwarebytes"; ID="Malwarebytes.Malwarebytes"; IsDefault=$false} );
-        "Produtividade" = @( @{Nome="OneDrive"; ID="Microsoft.OneDrive"; IsDefault=$false}, @{Nome="Notepad++"; ID="Notepad++.Notepad++"; IsDefault=$false}, @{Nome="7zip"; ID="7zip.7zip"; IsDefault=$false}, @{Nome="Microsoft Office"; ID="Microsoft.Office"; IsDefault=$true}, @{Nome="LibreOffice"; ID="TheDocumentFoundation.LibreOffice"; IsDefault=$false}, @{Nome="Asana"; ID="Asana.Asana"; IsDefault=$false}, @{Nome="Trello"; ID="9NBLGGH4XXVW"; IsDefault=$false} );
-        "Utilitarios" = @( @{Nome="TreeSize Free"; ID="XP9M26RSCLNT88"; IsDefault=$false}, @{Nome="PowerToys"; ID="Microsoft.PowerToys"; IsDefault=$false}, @{Nome="LGHUB"; ID="Logitech.LGHUB"; IsDefault=$false}, @{Nome="qBittorrent"; ID="qBittorrent.qBittorrent"; IsDefault=$false}, @{Nome="Chocolatey"; ID="Chocolatey.Chocolatey"; IsDefault=$false}, @{Nome="AnyDesk"; ID="anydesk.anydesk"; IsDefault=$true}, @{Nome="Teamviewer"; ID="XPDM17HK323C4X"; IsDefault=$false} );
-        "Desenvolvimento" = @( @{Nome="Visual Studio Code"; ID="Microsoft.VisualStudioCode"; IsDefault=$false}, @{Nome="Git"; ID="Git.Git"; IsDefault=$false}, @{Nome="Python 3"; ID="9NCVDN91XZQP"; IsDefault=$false}, @{Nome="Anaconda"; ID="Anaconda.Anaconda3"; IsDefault=$false}, @{Nome="NodeJS"; ID="OpenJS.NodeJS"; IsDefault=$false}, @{Nome="Cmake"; ID="Kitware.CMake"; IsDefault=$false}, @{Nome="MongoDB Server"; ID="MongoDB.Server"; IsDefault=$false}, @{Nome="MongoDB Tools"; ID="MongoDB.DatabaseTools"; IsDefault=$false}, @{Nome="MSYS2"; ID="MSYS2.MSYS2"; IsDefault=$false} );
-        "Jogos" = @( @{Nome="Steam"; ID="Valve.Steam"; IsDefault=$false}, @{Nome="Epic Games Launcher"; ID="EpicGames.EpicGamesLauncher"; IsDefault=$false} );
-        "Audio" = @( @{Nome="Astro Command Center"; ID="9PFZ8RFZG5X4"; IsDefault=$false} )
-    }
-    
-    # ... (código de criação dos botões de apps permanece o mesmo)
     $appButtons = @(); $yPos = 10; $categoriasOrdenadas = $apps.Keys | Sort-Object
     foreach ($cat in $categoriasOrdenadas) {
         $groupBox = New-Object System.Windows.Forms.GroupBox; $groupBox.Text = $cat; $groupBox.Location = New-Object System.Drawing.Point(10, $yPos); $groupBox.Size = New-Object System.Drawing.Size(760, 100); $groupBox.Font = New-Object System.Drawing.Font('Segoe UI', 9, [System.Drawing.FontStyle]::Bold); $mainPanel.Controls.Add($groupBox)
@@ -192,131 +145,134 @@ try {
         $requiredHeight = $flowLayoutPanel.GetPreferredSize([System.Drawing.Size]::new(740, 0)).Height + 30; $groupBox.Height = $requiredHeight; $yPos += $groupBox.Height + 10
     }
 
-    # Botões de ação principal
     $installButton = New-Object System.Windows.Forms.Button; $installButton.Text = 'Instalar Selecionados'; $installButton.Size = New-Object System.Drawing.Size(150, 35); $installButton.Location = New-Object System.Drawing.Point(0, 5); $installButton.BackColor = [System.Drawing.Color]::FromArgb(67, 160, 71); $installButton.ForeColor = [System.Drawing.Color]::White; $actionPanel.Controls.Add($installButton)
     $selectDefaultButton = New-Object System.Windows.Forms.Button; $selectDefaultButton.Text = 'Selecionar Padrao'; $selectDefaultButton.Size = New-Object System.Drawing.Size(130, 35); $selectDefaultButton.Location = New-Object System.Drawing.Point(160, 5); $actionPanel.Controls.Add($selectDefaultButton)
     $selectAllButton = New-Object System.Windows.Forms.Button; $selectAllButton.Text = 'Selecionar Todos'; $selectAllButton.Size = New-Object System.Drawing.Size(130, 35); $selectAllButton.Location = New-Object System.Drawing.Point(300, 5); $actionPanel.Controls.Add($selectAllButton)
     $deselectAllButton = New-Object System.Windows.Forms.Button; $deselectAllButton.Text = 'Limpar Selecao'; $deselectAllButton.Size = New-Object System.Drawing.Size(130, 35); $deselectAllButton.Location = New-Object System.Drawing.Point(440, 5); $actionPanel.Controls.Add($deselectAllButton)
     
-    ### NOVO BOTÃO NVIDIA E BOTÃO ATIVADOR MOVUDO ###
-    $nvidiaButton = New-Object System.Windows.Forms.Button; $nvidiaButton.Text = 'Instalar Driver NVIDIA'; $nvidiaButton.Size = New-Object System.Drawing.Size(160, 35); $nvidiaButton.Location = New-Object System.Drawing.Point(0, 5); $nvidiaButton.BackColor = [System.Drawing.Color]::FromArgb(118, 185, 0); $nvidiaButton.ForeColor = [System.Drawing.Color]::White; $specialTasksPanel.Controls.Add($nvidiaButton)
-    $activatorButton = New-Object System.Windows.Forms.Button; $activatorButton.Text = 'Rodar Ativador'; $activatorButton.Size = New-Object System.Drawing.Size(120, 35); $activatorButton.Location = New-Object System.Drawing.Point(170, 5); $activatorButton.BackColor = [System.Drawing.Color]::LightCoral; $specialTasksPanel.Controls.Add($activatorButton)
+    ### PAINEL DE TAREFAS ESPECIAIS ATUALIZADO ###
+    $nvidiaButton = New-Object System.Windows.Forms.Button; $nvidiaButton.Text = 'Instalar Driver NVIDIA'; $nvidiaButton.Size = New-Object System.Drawing.Size(150, 35); $nvidiaButton.Location = New-Object System.Drawing.Point(0, 5); $nvidiaButton.BackColor = [System.Drawing.Color]::FromArgb(118, 185, 0); $nvidiaButton.ForeColor = [System.Drawing.Color]::White; $specialTasksPanel.Controls.Add($nvidiaButton)
+    $amdGpuButton = New-Object System.Windows.Forms.Button; $amdGpuButton.Text = 'Instalar Software AMD'; $amdGpuButton.Size = New-Object System.Drawing.Size(150, 35); $amdGpuButton.Location = New-Object System.Drawing.Point(160, 5); $amdGpuButton.BackColor = [System.Drawing.Color]::FromArgb(237, 28, 36); $amdGpuButton.ForeColor = [System.Drawing.Color]::White; $specialTasksPanel.Controls.Add($amdGpuButton)
+    $amdChipsetButton = New-Object System.Windows.Forms.Button; $amdChipsetButton.Text = 'Instalar Chipset AMD'; $amdChipsetButton.Size = New-Object System.Drawing.Size(150, 35); $amdChipsetButton.Location = New-Object System.Drawing.Point(320, 5); $amdChipsetButton.BackColor = [System.Drawing.Color]::FromArgb(237, 28, 36); $amdChipsetButton.ForeColor = [System.Drawing.Color]::White; $specialTasksPanel.Controls.Add($amdChipsetButton)
+    $activatorButton = New-Object System.Windows.Forms.Button; $activatorButton.Text = 'Rodar Ativador'; $activatorButton.Size = New-Object System.Drawing.Size(120, 35); $activatorButton.Location = New-Object System.Drawing.Point(480, 5); $activatorButton.BackColor = [System.Drawing.Color]::DarkOrange; $specialTasksPanel.Controls.Add($activatorButton)
     
     #endregion
 
     #region EVENT HANDLERS
     
-    $jobCheckTimer = New-Object System.Windows.Forms.Timer; $jobCheckTimer.Interval = 1000
-    $jobCheckTimer.Add_Tick({
-        # ... (a lógica do timer de instalação de apps permanece a mesma)
-        if ($null -ne $script:installJob) { Receive-Job -Job $script:installJob | ForEach-Object { Log-Message $_ }; if ($script:installJob.State -in @('Completed', 'Failed', 'Stopped')) { Remove-Job -Job $script:installJob; $script:installJob = $null } }
-        if ($null -eq $script:installJob -and $script:installQueue.Count -gt 0) {
-            $appParaInstalar = $script:installQueue.Dequeue(); Log-Message "`n------------------------------------------------------------"; Log-Message "Iniciando instalacao de: $($appParaInstalar.Nome)"
-            $script:installJob = Start-Job -ScriptBlock { param($app); [System.Console]::OutputEncoding = [System.Text.Encoding]::UTF8; Write-Output "--- Instalando $($app.Nome) ($($app.ID)) ---"; $wingetArgs = @("install", "--id", $app.ID, "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity"); if (($app.ID -match "^\w{12}$") -and ($app.ID -ne "Microsoft.Office")) { $wingetArgs += "--source", "msstore"; Write-Output "INFO: ID detectado como da Microsoft Store. Especificando --source msstore." }; Write-Output "COMANDO: winget $($wingetArgs -join ' ')"; try { & winget @wingetArgs | ForEach-Object { Write-Output "  $_" }; if ($LASTEXITCODE -ne 0) { Write-Warning "Falha ao instalar $($app.Nome). Codigo de saida: $LASTEXITCODE" } else { Write-Output "$($app.Nome) instalado com sucesso." } } catch { Write-Warning "ERRO: Falha critica ao instalar $($app.Nome). $($_.Exception.Message)" } } -ArgumentList $appParaInstalar
+    $taskTimer = New-Object System.Windows.Forms.Timer; $taskTimer.Interval = 1000
+    $taskTimer.Add_Tick({
+        if ($null -ne $script:installJob) {
+            Receive-Job -Job $script:installJob | ForEach-Object { Log-Message $_ }
+            if ($script:installJob.State -in @('Completed', 'Failed', 'Stopped')) { Remove-Job -Job $script:installJob; $script:installJob = $null }
+            return
         }
-        if ($null -eq $script:installJob -and $script:installQueue.Count -eq 0) { $jobCheckTimer.Stop(); Log-Message "`n------------------------------------------------------------"; Log-Message "Todas as instalacoes foram concluidas."; $actionPanel.Controls | ForEach-Object { $_.Enabled = $true }; $specialTasksPanel.Controls | ForEach-Object { $_.Enabled = $true } }
+        if ($script:installQueue.Count -gt 0) {
+            $appParaInstalar = $script:installQueue.Dequeue(); Log-Message "`n------------------------------------------------------------"; Log-Message "Iniciando instalacao de: $($appParaInstalar.Nome)"
+            $script:installJob = Start-Job -ScriptBlock { 
+                param($app); 
+                [System.Console]::OutputEncoding = [System.Text.Encoding]::UTF8; 
+                Write-Output "--- Instalando $($app.Nome) ($($app.ID)) ---";
+                $wingetArgs = @("install", "--id", $app.ID, "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity", "--no-progress");
+                if (($app.ID -match "^\w{12}$") -and ($app.ID -ne "Microsoft.Office")) { $wingetArgs += "--source", "msstore"; Write-Output "INFO: ID detectado como da Microsoft Store." };
+                Write-Output "COMANDO: winget $($wingetArgs -join ' ')";
+                try { & winget @wingetArgs *>&1 | ForEach-Object { Write-Output "  $_" }; if ($LASTEXITCODE -ne 0) { Write-Warning "Falha ao instalar $($app.Nome). Codigo de saida: $LASTEXITCODE" } else { Write-Output "$($app.Nome) instalado com sucesso." } } catch { Write-Warning "ERRO: Falha critica ao instalar $($app.Nome). $($_.Exception.Message)" }
+            } -ArgumentList $appParaInstalar
+        } else {
+            $taskTimer.Stop(); Log-Message "`n------------------------------------------------------------"; Log-Message "Todas as tarefas foram concluidas."
+            $actionPanel.Controls | ForEach-Object { $_.Enabled = $true }; $specialTasksPanel.Controls | ForEach-Object { $_.Enabled = $true }
+        }
     })
 
     $installButton.Add_Click({
-        # Desabilita todos os botões de ação
-        $actionPanel.Controls | ForEach-Object { $_.Enabled = $false }; $specialTasksPanel.Controls | ForEach-Object { $_.Enabled = $false }
         $selectedApps = $appButtons | Where-Object { $_.BackColor -eq $selectedButtonColor } | Select-Object -ExpandProperty Tag
-        if ($selectedApps.Count -eq 0) { [System.Windows.Forms.MessageBox]::Show("Nenhum aplicativo selecionado para instalacao.", "Aviso", "OK", "Warning"); $actionPanel.Controls | ForEach-Object { $_.Enabled = $true }; $specialTasksPanel.Controls | ForEach-Object { $_.Enabled = $true }; return }
+        if ($selectedApps.Count -eq 0) { [System.Windows.Forms.MessageBox]::Show("Nenhum aplicativo selecionado para instalacao.", "Aviso", "OK", "Warning"); return }
+        
+        $actionPanel.Controls | ForEach-Object { $_.Enabled = $false }; $specialTasksPanel.Controls | ForEach-Object { $_.Enabled = $false }
         $script:installQueue.Clear(); $selectedApps | ForEach-Object { $script:installQueue.Enqueue($_) }
         $logTextBox.Clear(); Log-Message "Iniciando processo de instalacao em fila..."
-        $jobCheckTimer.Start()
+        $taskTimer.Start()
     })
 
-    ### EVENTO DE CLIQUE PARA O NOVO BOTÃO NVIDIA ###
     $nvidiaButton.Add_Click({
-        # Desabilita todos os botões de ação para evitar sobreposição
-        $actionPanel.Controls | ForEach-Object { $_.Enabled = $false }
-        $specialTasksPanel.Controls | ForEach-Object { $_.Enabled = $false }
-        $logTextBox.Clear()
-
-        # O scriptblock do job agora é mais complexo: ele contém a definição da função e a chamada a ela.
+        $actionPanel.Controls | ForEach-Object { $_.Enabled = $false }; $specialTasksPanel.Controls | ForEach-Object { $_.Enabled = $false }; $logTextBox.Clear()
+        $script:installQueue.Clear()
         $script:installJob = Start-Job -ScriptBlock {
-            # É necessário redefinir a função Log-Message dentro do job,
-            # pois ele não tem acesso à função da janela principal. Ele usará Write-Output.
-            function Log-Message { param($Message) Write-Output $Message }
-            
-            # A definição completa da função Get-NvidiaDriver vai aqui dentro
-            function Get-NvidiaDriver {
-                [CmdletBinding()]
-                param (
-                    [string]$DownloadPath = "$env:USERPROFILE\Downloads",
-                    [string]$DriverType = "Game Ready",
-                    [switch]$InstallSilently
-                )
-                Log-Message "--- Iniciando busca por driver da NVIDIA ---"
-                Log-Message "[1/5] Identificando a GPU NVIDIA instalada..."
-                try {
-                    $gpu = Get-CimInstance -ClassName Win32_VideoController | Where-Object { $_.Name -like '*NVIDIA*' } | Select-Object -First 1
-                    if (-not $gpu) { Log-Message "ERRO: Nenhuma placa de video NVIDIA foi encontrada neste sistema."; return }
-                    $gpuName = $gpu.Name.Replace("NVIDIA ", ""); Log-Message "   GPU Encontrada: $gpuName"
-                } catch { Log-Message "ERRO: Falha ao obter informacoes da GPU."; return }
-
-                Log-Message "[2/5] Buscando o driver mais recente no site da NVIDIA..."
-                try {
-                    $searchResponse = Invoke-RestMethod -Uri "https://www.nvidia.com/Download/Find.aspx?lang=en-us" -Method Post -Body @{ "pf"="1"; "q"=$gpuName; "d"=if ($DriverType -eq "Game Ready") { "1" } else { "2" } }
-                } catch { Log-Message "ERRO: Falha ao conectar ao site da NVIDIA."; return }
-
-                Log-Message "[3/5] Analisando resultados da busca..."
-                $latestDriver = $searchResponse.drivers | Sort-Object version -Descending | Select-Object -First 1
-                if (-not $latestDriver) { Log-Message "ERRO: Nenhum driver encontrado para '$gpuName'."; return }
-                $driverDetailsUrl = "https://www.nvidia.com" + $latestDriver.download_url
-                Log-Message "  Versao: $($latestDriver.version)"; Log-Message "  Data de Lancamento: $($latestDriver.release_date)"
-
-                Log-Message "[4/5] Extraindo o link de download final..."
-                try {
-                    $detailsPageHtml = Invoke-RestMethod -Uri $driverDetailsUrl -Method Get
-                    if ($detailsPageHtml -match 'href="(.+?\.exe)"') { $finalDownloadUrl = $matches[1]; Log-Message "  Link de download extraido com sucesso!" }
-                    else { Log-Message "ERRO: Nao foi possivel encontrar o link de download do .exe."; return }
-                } catch { Log-Message "ERRO: Falha ao acessar a pagina de detalhes do driver."; return }
-
-                $fileName = Split-Path $finalDownloadUrl -Leaf; $destinationPath = Join-Path $DownloadPath $fileName
-                Log-Message "[5/5] Baixando o driver para '$destinationPath'..."
-                try {
-                    Import-Module BitsTransfer; Start-BitsTransfer -Source $finalDownloadUrl -Destination $destinationPath -DisplayName "NVIDIA Driver Download"
-                    Log-Message "Download concluido com sucesso!"
-                } catch { Log-Message "ERRO: Falha no download."; return }
-                
-                if ($InstallSilently) {
-                    Log-Message "--- Iniciando instalacao silenciosa ---"; Log-Message "A tela pode piscar. O computador NAO sera reiniciado."
-                    try {
-                        Start-Process -FilePath $destinationPath -ArgumentList "-s -noreboot" -Verb RunAs -Wait
-                        Log-Message "Instalacao silenciosa concluida."
-                    } catch { Log-Message "ERRO: Falha ao iniciar a instalacao silenciosa. $_" }
-                }
+            function Invoke-NvidiaDriverInstall {
+                [CmdletBinding()] param()
+                Write-Output "--- INICIANDO PROCESSO DE ATUALIZACAO DE DRIVER NVIDIA VIA CHOCOLATEY ---"
+                Write-Output "[1/3] Verificando se o Chocolatey esta instalado..."
+                if (-not (Get-Command choco.exe -ErrorAction SilentlyContinue)) {
+                    Write-Output "   Chocolatey nao encontrado. Iniciando instalacao silenciosa..."
+                    try { Set-ExecutionPolicy Bypass -Scope Process -Force; [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1')); Start-Sleep -Seconds 5; if (-not (Get-Command choco.exe -ErrorAction SilentlyContinue)) { Write-Output "ERRO: A instalacao do Chocolatey parece ter falhado."; return }; Write-Output "   Chocolatey instalado com sucesso!" } catch { Write-Output "ERRO: Falha critica durante a instalacao do Chocolatey. Detalhes: $($_.Exception.Message)"; return }
+                } else { Write-Output "   Chocolatey ja esta instalado." }
+                Write-Output "[2/3] Executando o comando para instalar o driver NVIDIA..."
+                try { & choco install nvidia-display-driver -y *>&1 | ForEach-Object { Write-Output "  $_" }; if ($LASTEXITCODE -ne 0) { Write-Warning "O processo do Chocolatey terminou com o codigo de saida: $LASTEXITCODE."} else { Write-Output "Driver NVIDIA instalado/atualizado com sucesso!" } } catch { Write-Output "ERRO: Falha ao executar o comando do Chocolatey. Detalhes: $($_.Exception.Message)" }
+                Write-Output "[3/3] Processo de instalacao do driver NVIDIA concluido."
             }
-            # Chamada final da função com os parâmetros desejados
-            Get-NvidiaDriver -DriverType "Game Ready" -InstallSilently
+            Invoke-NvidiaDriverInstall
         }
-        
-        # O timer de instalação de apps também pode monitorar este job único
-        $jobCheckTimer.Start()
+        $taskTimer.Start()
     })
 
-    # ... (outros eventos de clique permanecem iguais)
+    $amdGpuButton.Add_Click({
+        $actionPanel.Controls | ForEach-Object { $_.Enabled = $false }; $specialTasksPanel.Controls | ForEach-Object { $_.Enabled = $false }; $logTextBox.Clear()
+        $script:installQueue.Clear()
+        $script:installJob = Start-Job -ScriptBlock {
+            function Invoke-AmdGpuSoftwareInstall {
+                [CmdletBinding()] param()
+                Write-Output "--- INICIANDO PROCESSO DE ATUALIZACAO DE SOFTWARE AMD GPU VIA WINGET ---"
+                $PackageId = "AMD.AMDSoftwareCloudEdition"
+                Write-Output "[1/2] Verificando o pacote '$PackageId' no repositorio Winget..."
+                try { $searchResult = winget search --id $PackageId *>&1; if ($searchResult -match "No package found matching input criteria.") { Write-Output "ERRO: O pacote de software '$PackageId' nao foi encontrado."; return }; Write-Output "   Pacote de software encontrado com sucesso!" } catch { Write-Output "ERRO: Falha ao executar o comando 'winget'."; return }
+                Write-Output "[2/2] Iniciando o download e a instalacao via Winget..."
+                $wingetArgs = "install --id $PackageId --exact --source winget --accept-package-agreements --accept-source-agreements --disable-interactivity --no-progress"
+                try { $process = Start-Process winget -ArgumentList $wingetArgs -Wait -PassThru -NoNewWindow; if ($process.ExitCode -eq 0) { Write-Output "Software AMD GPU instalado/atualizado com sucesso!" } else { Write-Output "AVISO: Winget terminou com o codigo de saida: $($process.ExitCode)." } } catch { Write-Output "ERRO: Falha ao iniciar a instalacao do Winget. Detalhes: $($_.Exception.Message)" }
+            }
+            Invoke-AmdGpuSoftwareInstall
+        }
+        $taskTimer.Start()
+    })
+
+    $amdChipsetButton.Add_Click({
+        $actionPanel.Controls | ForEach-Object { $_.Enabled = $false }; $specialTasksPanel.Controls | ForEach-Object { $_.Enabled = $false }; $logTextBox.Clear()
+        $script:installQueue.Clear()
+        $script:installJob = Start-Job -ScriptBlock {
+            function Invoke-AmdChipsetDriverInstall {
+                [CmdletBinding()] param()
+                Write-Output "--- INICIANDO PROCESSO DE INSTALACAO DO CHIPSET AMD VIA CHOCOLATEY ---"
+                Write-Output "[1/3] Verificando se o Chocolatey esta instalado..."
+                if (-not (Get-Command choco.exe -ErrorAction SilentlyContinue)) {
+                    Write-Output "   Chocolatey nao encontrado. Iniciando instalacao silenciosa..."
+                    try { Set-ExecutionPolicy Bypass -Scope Process -Force; [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1')); Start-Sleep -Seconds 5; if (-not (Get-Command choco.exe -ErrorAction SilentlyContinue)) { Write-Output "ERRO: A instalacao do Chocolatey parece ter falhado."; return }; Write-Output "   Chocolatey instalado com sucesso!" } catch { Write-Output "ERRO: Falha critica durante a instalacao do Chocolatey. Detalhes: $($_.Exception.Message)"; return }
+                } else { Write-Output "   Chocolatey ja esta instalado." }
+                Write-Output "[2/3] Executando o comando para instalar o chipset AMD..."
+                try { & choco install amd-ryzen-chipset -y *>&1 | ForEach-Object { Write-Output "  $_" }; if ($LASTEXITCODE -ne 0) { Write-Warning "O processo do Chocolatey terminou com o codigo de saida: $LASTEXITCODE."} else { Write-Output "Driver de Chipset AMD instalado/atualizado com sucesso!" } } catch { Write-Output "ERRO: Falha ao executar o comando do Chocolatey. Detalhes: $($_.Exception.Message)" }
+                Write-Output "[3/3] Processo de instalacao do chipset AMD concluido."
+            }
+            Invoke-AmdChipsetDriverInstall
+        }
+        $taskTimer.Start()
+    })
+
     $activatorButton.Add_Click({
         $confirmation = [System.Windows.Forms.MessageBox]::Show("AVISO DE SEGURANCA:`n`nVoce esta prestes a executar um script de ativacao baixado da internet (`get.activated.win`). Executar scripts de fontes nao confiaveis pode ser perigoso.`n`nDeseja continuar?","Confirmacao de Seguranca", "YesNo", "Warning")
         if ($confirmation -eq 'No') { Log-Message "Operacao do ativador cancelada pelo usuario."; return }
-        $logTextBox.Clear(); Log-Message "Executando o ativador..."; $activatorButton.Enabled = $false
+        $logTextBox.Clear(); Log-Message "Executando o ativador...";
+        $activatorButton.Enabled = $false
         try { Invoke-RestMethod -Uri "https://get.activated.win" | Invoke-Expression; Log-Message "Comando do ativador concluido com sucesso." }
         catch { Log-Message "ERRO: Falha ao executar o ativador: $($_.Exception.Message)" }
         finally { $activatorButton.Enabled = $true }
     })
+
     $selectDefaultButton.Add_Click({ foreach ($btn in $appButtons) { if ($btn.Tag.IsDefault) { $btn.BackColor = $selectedButtonColor; $btn.FlatAppearance.BorderColor = $selectedButtonBorderColor } } })
     $selectAllButton.Add_Click({ foreach ($btn in $appButtons) { $btn.BackColor = $selectedButtonColor; $btn.FlatAppearance.BorderColor = $selectedButtonBorderColor } })
     $deselectAllButton.Add_Click({ foreach ($btn in $appButtons) { $btn.BackColor = $defaultButtonColor; $btn.FlatAppearance.BorderColor = [System.Drawing.Color]::LightGray } })
 
-    $mainForm.Add_FormClosing({
-        $jobCheckTimer.Stop()
-        if($null -ne $script:installJob) { Remove-Job -Job $script:installJob -Force }
-    })
+    $mainForm.Add_FormClosing({ $taskTimer.Stop(); if($null -ne $script:installJob) { Remove-Job -Job $script:installJob -Force } })
     #endregion
 
-    #region EXECUTION - Exibe o formulario
+    #region EXECUTION
     $mainForm.ShowDialog()
     #endregion
 }
