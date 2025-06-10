@@ -1,318 +1,235 @@
-#region INFO
-<#
-.SYNOPSIS
-    Instalador de aplicativos e utilitario de sistema com interface grafica (GUI).
-.DESCRIPTION
-    Este script apresenta uma interface grafica criada com Windows Forms para permitir
-    ao usuario selecionar e instalar aplicativos via Winget.
-.AUTHOR
-    Adaptado por Gemini
-.VERSION
-    2.5 (Versao sem acentuacao para maxima compatibilidade)
-#>
-#endregion INFO
+#region ADMINISTRATOR - Verificacao e Elevacao de Permissao Inteligente
 
-# Define a codificacao padrao para a saida de comandos, uma boa pratica.
-$PSDefaultParameterValues['*:Encoding'] = 'utf8'
+# 1. Verifica se o script esta rodando como Administrador
+$currentUser = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+$isAdmin = $currentUser.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)
 
-$script:installJob = $null
+if (-not $isAdmin) {
+    # 2. Se NAO for admin, inicia o processo de auto-elevacao.
+    $scriptPath = $MyInvocation.MyCommand.Path
+    $arguments = "-NoProfile -ExecutionPolicy Bypass"
 
-#region GUI - Criação da Interface Grafica com Windows Forms
-
-Add-Type -AssemblyName System.Windows.Forms
-Add-Type -AssemblyName System.Drawing
-
-$mainForm = New-Object System.Windows.Forms.Form
-$mainForm.Text = 'Pos Instalador de Aplicativos'
-$mainForm.Size = New-Object System.Drawing.Size(820, 750)
-$mainForm.StartPosition = 'CenterScreen'
-$mainForm.FormBorderStyle = 'FixedSingle'
-$mainForm.MaximizeBox = $false
-
-$logLabel = New-Object System.Windows.Forms.Label
-$logLabel.Text = "Log de Instalacao:"
-$logLabel.Location = New-Object System.Drawing.Point(20, 520)
-$logLabel.AutoSize = $true
-$mainForm.Controls.Add($logLabel)
-
-$logTextBox = New-Object System.Windows.Forms.TextBox
-$logTextBox.Location = New-Object System.Drawing.Point(20, 540)
-$logTextBox.Size = New-Object System.Drawing.Size(760, 150)
-$logTextBox.Multiline = $true
-$logTextBox.ScrollBars = 'Vertical'
-$logTextBox.ReadOnly = $true
-$logTextBox.Font = New-Object System.Drawing.Font('Consolas', 8)
-$mainForm.Controls.Add($logTextBox)
-
-function Log-Message {
-    param($Message)
-    if ($logTextBox.InvokeRequired) {
-        $logTextBox.Invoke([Action[string]]$logTextBox.AppendText, "$Message`r`n")
-    } else {
-        $logTextBox.AppendText("$Message`r`n")
-    }
-}
-
-$mainPanel = New-Object System.Windows.Forms.Panel
-$mainPanel.Location = New-Object System.Drawing.Point(20, 20)
-$mainPanel.Size = New-Object System.Drawing.Size(770, 420)
-$mainPanel.AutoScroll = $true
-$mainPanel.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
-$mainForm.Controls.Add($mainPanel)
-
-# Lista de apps sem acentuacao
-$apps = @{
-    "Comunicacao" = @(
-        @{Nome="WhatsApp"; ID="9NKSQGP7F2NH"; IsDefault=$false},
-        @{Nome="Discord"; ID="Discord.Discord"; IsDefault=$false}
-    )
-    "Navegador" = @(
-        @{Nome="Chrome"; ID="Google.Chrome"; IsDefault=$true},
-        @{Nome="Brave"; ID="Brave.Brave"; IsDefault=$false},
-        @{Nome="Firefox"; ID="Mozilla.Firefox"; IsDefault=$false}
-    )
-    "Entretenimento" = @(
-        @{Nome="VLC"; ID="VideoLAN.VLC"; IsDefault=$true},
-        @{Nome="Spotify"; ID="Spotify.Spotify"; IsDefault=$false},
-        @{Nome="Corel Draw"; ID="9PBL2KQXQ47K"; IsDefault=$false},
-        @{Nome="Stremio"; ID="Stremio.Stremio"; IsDefault=$false}
-    )
-    "Seguranca" = @(
-        @{Nome="WireGuard"; ID="WireGuard.WireGuard"; IsDefault=$false},
-        @{Nome="Malwarebytes"; ID="Malwarebytes.Malwarebytes"; IsDefault=$false}
-    )
-    "Produtividade" = @(
-        @{Nome="OneDrive"; ID="Microsoft.OneDrive"; IsDefault=$false},
-        @{Nome="Notepad++"; ID="Notepad++.Notepad++"; IsDefault=$false},
-        @{Nome="7zip"; ID="7zip.7zip"; IsDefault=$false},
-        @{Nome="Microsoft Office"; ID="Microsoft.Office"; IsDefault=$true},
-        @{Nome="LibreOffice"; ID="TheDocumentFoundation.LibreOffice"; IsDefault=$false},
-        @{Nome="Asana"; ID="Asana.Asana"; IsDefault=$false},
-        @{Nome="Trello"; ID="9NBLGGH4XXVW"; IsDefault=$false}
-    )
-    "Utilitarios" = @(
-        @{Nome="TreeSize Free"; ID="XP9M26RSCLNT88"; IsDefault=$false},
-        @{Nome="PowerToys"; ID="Microsoft.PowerToys"; IsDefault=$false},
-        @{Nome="LGHUB"; ID="Logitech.LGHUB"; IsDefault=$false},
-        @{Nome="qBittorrent"; ID="qBittorrent.qBittorrent"; IsDefault=$false},
-        @{Nome="Chocolatey"; ID="Chocolatey.Chocolatey"; IsDefault=$false},
-        @{Nome="AnyDesk"; ID="anydesk.anydesk"; IsDefault=$true},
-        @{Nome="Teamviewer"; ID="XPDM17HK323C4X"; IsDefault=$false}
-    )
-    "Desenvolvimento" = @(
-        @{Nome="Visual Studio Code"; ID="Microsoft.VisualStudioCode"; IsDefault=$false},
-        @{Nome="Git"; ID="Git.Git"; IsDefault=$false},
-        @{Nome="Python 3"; ID="9NCVDN91XZQP"; IsDefault=$false},
-        @{Nome="Anaconda"; ID="Anaconda.Anaconda3"; IsDefault=$false},
-        @{Nome="NodeJS"; ID="OpenJS.NodeJS"; IsDefault=$false},
-        @{Nome="Cmake"; ID="Kitware.CMake"; IsDefault=$false},
-        @{Nome="MongoDB Server"; ID="MongoDB.Server"; IsDefault=$false},
-        @{Nome="MongoDB Tools"; ID="MongoDB.DatabaseTools"; IsDefault=$false},
-        @{Nome="MSYS2"; ID="MSYS2.MSYS2"; IsDefault=$false}
-    )
-    "Jogos" = @(
-        @{Nome="Steam"; ID="Valve.Steam"; IsDefault=$false},
-        @{Nome="Epic Games Launcher"; ID="EpicGames.EpicGamesLauncher"; IsDefault=$false}
-    )
-    "Audio" = @(
-        @{Nome="Astro Command Center"; ID="9PFZ8RFZG5X4"; IsDefault=$false}
-    )
-}
-
-$checkboxes = @()
-$yPos = 10
-$categoriasOrdenadas = $apps.Keys | Sort-Object
-
-foreach ($cat in $categoriasOrdenadas) {
-    $groupBox = New-Object System.Windows.Forms.GroupBox
-    $groupBox.Text = $cat
-    $groupBox.Location = New-Object System.Drawing.Point(10, $yPos)
-    $groupBox.Size = New-Object System.Drawing.Size(730, 100)
-    $groupBox.Font = New-Object System.Drawing.Font('Segoe UI', 9, [System.Drawing.FontStyle]::Bold)
-    $mainPanel.Controls.Add($groupBox)
-
-    $flowLayoutPanel = New-Object System.Windows.Forms.FlowLayoutPanel
-    $flowLayoutPanel.Dock = [System.Windows.Forms.DockStyle]::Fill
-    $flowLayoutPanel.FlowDirection = 'LeftToRight'
-    $groupBox.Controls.Add($flowLayoutPanel)
-
-    $appsNestaCategoria = $apps[$cat] | Sort-Object Nome
-    foreach ($app in $appsNestaCategoria) {
-        $checkBox = New-Object System.Windows.Forms.CheckBox
-        $checkBox.Text = $app.Nome
-        $checkBox.Tag = $app
-        $checkBox.AutoSize = $true
-        $checkBox.Font = New-Object System.Drawing.Font('Segoe UI', 9, [System.Drawing.FontStyle]::Regular)
-        $checkBox.Padding = New-Object System.Windows.Forms.Padding(10, 5, 10, 5)
-        $flowLayoutPanel.Controls.Add($checkBox)
-        $checkboxes += $checkBox
-    }
-    
-    $requiredHeight = $flowLayoutPanel.GetPreferredSize([System.Drawing.Size]::new(700, 0)).Height + 30
-    $groupBox.Height = $requiredHeight
-    $yPos += $groupBox.Height + 10
-}
-
-$actionPanel = New-Object System.Windows.Forms.Panel
-$actionPanel.Location = New-Object System.Drawing.Point(20, 450)
-$actionPanel.Size = New-Object System.Drawing.Size(760, 60)
-$mainForm.Controls.Add($actionPanel)
-
-$installButton = New-Object System.Windows.Forms.Button
-$installButton.Text = 'Instalar Selecionados'
-$installButton.Size = New-Object System.Drawing.Size(150, 35)
-$installButton.Location = New-Object System.Drawing.Point(0, 10)
-$installButton.BackColor = [System.Drawing.Color]::LightGreen
-$actionPanel.Controls.Add($installButton)
-
-$selectDefaultButton = New-Object System.Windows.Forms.Button
-$selectDefaultButton.Text = 'Selecionar Padrao'
-$selectDefaultButton.Size = New-Object System.Drawing.Size(130, 35)
-$selectDefaultButton.Location = New-Object System.Drawing.Point(160, 10)
-$actionPanel.Controls.Add($selectDefaultButton)
-
-$selectAllButton = New-Object System.Windows.Forms.Button
-$selectAllButton.Text = 'Selecionar Todos'
-$selectAllButton.Size = New-Object System.Drawing.Size(130, 35)
-$selectAllButton.Location = New-Object System.Drawing.Point(300, 10)
-$actionPanel.Controls.Add($selectAllButton)
-
-$deselectAllButton = New-Object System.Windows.Forms.Button
-$deselectAllButton.Text = 'Limpar Selecao'
-$deselectAllButton.Size = New-Object System.Drawing.Size(130, 35)
-$deselectAllButton.Location = New-Object System.Drawing.Point(440, 10)
-$actionPanel.Controls.Add($deselectAllButton)
-
-$activatorButton = New-Object System.Windows.Forms.Button
-$activatorButton.Text = 'Rodar Ativador'
-$activatorButton.Size = New-Object System.Drawing.Size(120, 35)
-$activatorButton.Location = New-Object System.Drawing.Point(620, 10)
-$activatorButton.BackColor = [System.Drawing.Color]::LightCoral
-$actionPanel.Controls.Add($activatorButton)
-#endregion
-
-#region EVENT HANDLERS - Logica dos Botoes
-
-$jobCheckTimer = New-Object System.Windows.Forms.Timer
-$jobCheckTimer.Interval = 500
-
-$jobCheckTimer.Add_Tick({
-    if ($null -ne $script:installJob) {
-        Receive-Job -Job $script:installJob | ForEach-Object { Log-Message $_ }
-
-        if ($script:installJob.State -in @('Completed', 'Failed', 'Stopped')) {
-            Log-Message "`n--- Processo de instalacao concluido. ---"
-            $jobCheckTimer.Stop()
-            
-            Remove-Job -Job $script:installJob
-            $script:installJob = $null
-
-            $actionPanel.Controls | ForEach-Object { $_.Enabled = $true }
-        }
+    if (-not [string]::IsNullOrEmpty($scriptPath)) {
+        # MODO ARQUIVO
+        $arguments += " -File `"$scriptPath`""
     }
     else {
-        $jobCheckTimer.Stop()
-    }
-})
-
-$installButton.Add_Click({
-    $selectedApps = $checkboxes | Where-Object { $_.Checked } | Select-Object -ExpandProperty Tag
-
-    if ($selectedApps.Count -eq 0) {
-        [System.Windows.Forms.MessageBox]::Show("Nenhum aplicativo selecionado para instalacao.", "Aviso", "OK", "Warning")
-        return
+        # MODO 'irm | iex'
+        $tempScriptPath = Join-Path $env:TEMP ([System.Guid]::NewGuid().ToString() + ".ps1")
+        $scriptContent = $MyInvocation.MyCommand.Definition
+        $scriptContent | Out-File -FilePath $tempScriptPath -Encoding utf8
+        $arguments += " -File `"$tempScriptPath`""
     }
 
-    $actionPanel.Controls | ForEach-Object { $_.Enabled = $false }
-    $logTextBox.Clear()
-    Log-Message "Iniciando a instalacao..."
-
-    $script:installJob = Start-Job -ScriptBlock {
-        param($appsToInstall)
-        
-        foreach ($app in $appsToInstall) {
-            Write-Output "`n--- Instalando $($app.Nome) ($($app.ID)) ---"
-            
-            $wingetArgs = @("install", "--id", $app.ID, "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity", "--source", "winget")
-
-            if (($app.ID -match "^\w{12}$") -and ($app.ID -ne "Microsoft.Office")) {
-                $wingetArgs[-1] = "msstore"
-                Write-Output "INFO: Usando a fonte 'msstore'."
-            }
-            
-            Write-Output "COMANDO: winget $($wingetArgs -join ' ')"
-            
-            try {
-                & winget @wingetArgs | ForEach-Object { Write-Output "  $_" }
-                if ($LASTEXITCODE -ne 0) {
-                    Write-Warning "Falha ao instalar $($app.Nome). Codigo de saida: $LASTEXITCODE"
-                } else {
-                    Write-Output "$($app.Nome) instalado com sucesso."
-                }
-            } catch {
-                Write-Warning "ERRO: Falha critica ao instalar $($app.Nome). $($_.Exception.Message)"
-            }
-        }
-    } -ArgumentList $selectedApps
+    Write-Warning "Permissao de administrador necessaria. Reiniciando o script com elevacao..."
+    Start-Process powershell.exe -ArgumentList $arguments -Verb RunAs
     
-    $jobCheckTimer.Start()
-})
-
-$activatorButton.Add_Click({
-    $confirmation = [System.Windows.Forms.MessageBox]::Show(
-        "AVISO DE SEGURANCA:`n`nVoce esta prestes a executar um script de ativacao baixado da internet (`get.activated.win`). Executar scripts de fontes nao confiaveis pode ser perigoso.`n`nDeseja continuar?",
-        "Confirmacao de Seguranca", 
-        "YesNo", 
-        "Warning"
-    )
-
-    if ($confirmation -eq 'No') {
-        Log-Message "Operacao do ativador cancelada pelo usuario."
-        return
-    }
-
-    $logTextBox.Clear()
-    Log-Message "Executando o ativador..."
-    $activatorButton.Enabled = $false
-
-    try {
-        Invoke-RestMethod -Uri "https://get.activated.win" | Invoke-Expression
-        Log-Message "Comando do ativador concluido com sucesso."
-    } catch {
-        Log-Message "ERRO: Falha ao executar o ativador: $($_.Exception.Message)"
-    } finally {
-        $activatorButton.Enabled = $true
-    }
-})
-
-$selectDefaultButton.Add_Click({
-    foreach ($cb in $checkboxes) {
-        if ($cb.Tag.IsDefault) {
-            $cb.Checked = $true
-        }
-    }
-})
-
-$selectAllButton.Add_Click({
-    foreach ($cb in $checkboxes) {
-        $cb.Checked = $true
-    }
-})
-
-$deselectAllButton.Add_Click({
-    foreach ($cb in $checkboxes) {
-        $cb.Checked = $false
-    }
-})
-
-$mainForm.Add_FormClosing({
-    $jobCheckTimer.Stop()
-    if($null -ne $script:installJob) {
-        Remove-Job -Job $script:installJob -Force
-    }
-})
+    # 3. Fecha a janela atual
+    exit
+}
 #endregion
 
-#region EXECUTION - Exibe o formulario
-$mainForm.ShowDialog()
-#endregionz
+### O SCRIPT PRINCIPAL AGORA RODA DENTRO DE UM BLOCO TRY/FINALLY ###
+try {
+    #region INFO
+    <#
+    .SYNOPSIS
+        Instalador de aplicativos e utilitario de sistema com interface grafica (GUI).
+    .DESCRIPTION
+        Este script usa um sistema de fila para instalar multiplos aplicativos de forma confiavel.
+    .AUTHOR
+        Adaptado por Gemini
+    .VERSION
+        5.0 (Sistema de Fila para Instalacao em Lote)
+    #>
+    #endregion
+
+    $PSDefaultParameterValues['*:Encoding'] = 'utf8'
+    
+    # Variaveis de estado para o sistema de fila
+    $script:installJob = $null
+    $script:installQueue = [System.Collections.Generic.Queue[object]]::new()
+
+    #region GUI - Criacao da Interface Grafica com Windows Forms
+
+    Add-Type -AssemblyName System.Windows.Forms
+    Add-Type -AssemblyName System.Drawing
+
+    $mainForm = New-Object System.Windows.Forms.Form
+    $mainForm.Text = 'Pos Instalador de Aplicativos (Executando como Administrador)'
+    $mainForm.Size = New-Object System.Drawing.Size(820, 750)
+    $mainForm.StartPosition = 'CenterScreen'
+    $mainForm.FormBorderStyle = 'FixedSingle'
+    $mainForm.MaximizeBox = $false
+
+    # ... (O restante da criação da GUI não muda)
+    $logLabel = New-Object System.Windows.Forms.Label
+    $logLabel.Text = "Log de Instalacao:"
+    $logLabel.Location = New-Object System.Drawing.Point(20, 520)
+    $logLabel.AutoSize = $true
+    $mainForm.Controls.Add($logLabel)
+
+    $logTextBox = New-Object System.Windows.Forms.TextBox
+    $logTextBox.Location = New-Object System.Drawing.Point(20, 540)
+    $logTextBox.Size = New-Object System.Drawing.Size(760, 150)
+    $logTextBox.Multiline = $true
+    $logTextBox.ScrollBars = 'Vertical'
+    $logTextBox.ReadOnly = $true
+    $logTextBox.Font = New-Object System.Drawing.Font('Consolas', 8)
+    $mainForm.Controls.Add($logTextBox)
+
+    function Log-Message {
+        param($Message)
+        if ($logTextBox.InvokeRequired) {
+            $logTextBox.Invoke([Action[string]]$logTextBox.AppendText, "$Message`r`n")
+        } else {
+            $logTextBox.AppendText("$Message`r`n")
+        }
+    }
+
+    $mainPanel = New-Object System.Windows.Forms.Panel
+    $mainPanel.Location = New-Object System.Drawing.Point(20, 20)
+    $mainPanel.Size = New-Object System.Drawing.Size(770, 420)
+    $mainPanel.AutoScroll = $true
+    $mainPanel.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
+    $mainForm.Controls.Add($mainPanel)
+
+    $apps = @{
+        "Comunicacao" = @( @{Nome="WhatsApp"; ID="9NKSQGP7F2NH"; IsDefault=$false}, @{Nome="Discord"; ID="Discord.Discord"; IsDefault=$false} );
+        "Navegador" = @( @{Nome="Chrome"; ID="Google.Chrome"; IsDefault=$true}, @{Nome="Brave"; ID="Brave.Brave"; IsDefault=$false}, @{Nome="Firefox"; ID="Mozilla.Firefox"; IsDefault=$false} );
+        "Entretenimento" = @( @{Nome="VLC"; ID="VideoLAN.VLC"; IsDefault=$true}, @{Nome="Spotify"; ID="Spotify.Spotify"; IsDefault=$false}, @{Nome="Corel Draw"; ID="9PBL2KQXQ47K"; IsDefault=$false}, @{Nome="Stremio"; ID="Stremio.Stremio"; IsDefault=$false} );
+        "Seguranca" = @( @{Nome="WireGuard"; ID="WireGuard.WireGuard"; IsDefault=$false}, @{Nome="Malwarebytes"; ID="Malwarebytes.Malwarebytes"; IsDefault=$false} );
+        "Produtividade" = @( @{Nome="OneDrive"; ID="Microsoft.OneDrive"; IsDefault=$false}, @{Nome="Notepad++"; ID="Notepad++.Notepad++"; IsDefault=$false}, @{Nome="7zip"; ID="7zip.7zip"; IsDefault=$false}, @{Nome="Microsoft Office"; ID="Microsoft.Office"; IsDefault=$true}, @{Nome="LibreOffice"; ID="TheDocumentFoundation.LibreOffice"; IsDefault=$false}, @{Nome="Asana"; ID="Asana.Asana"; IsDefault=$false}, @{Nome="Trello"; ID="9NBLGGH4XXVW"; IsDefault=$false} );
+        "Utilitarios" = @( @{Nome="TreeSize Free"; ID="XP9M26RSCLNT88"; IsDefault=$false}, @{Nome="PowerToys"; ID="Microsoft.PowerToys"; IsDefault=$false}, @{Nome="LGHUB"; ID="Logitech.LGHUB"; IsDefault=$false}, @{Nome="qBittorrent"; ID="qBittorrent.qBittorrent"; IsDefault=$false}, @{Nome="Chocolatey"; ID="Chocolatey.Chocolatey"; IsDefault=$false}, @{Nome="AnyDesk"; ID="anydesk.anydesk"; IsDefault=$true}, @{Nome="Teamviewer"; ID="XPDM17HK323C4X"; IsDefault=$false} );
+        "Desenvolvimento" = @( @{Nome="Visual Studio Code"; ID="Microsoft.VisualStudioCode"; IsDefault=$false}, @{Nome="Git"; ID="Git.Git"; IsDefault=$false}, @{Nome="Python 3"; ID="9NCVDN91XZQP"; IsDefault=$false}, @{Nome="Anaconda"; ID="Anaconda.Anaconda3"; IsDefault=$false}, @{Nome="NodeJS"; ID="OpenJS.NodeJS"; IsDefault=$false}, @{Nome="Cmake"; ID="Kitware.CMake"; IsDefault=$false}, @{Nome="MongoDB Server"; ID="MongoDB.Server"; IsDefault=$false}, @{Nome="MongoDB Tools"; ID="MongoDB.DatabaseTools"; IsDefault=$false}, @{Nome="MSYS2"; ID="MSYS2.MSYS2"; IsDefault=$false} );
+        "Jogos" = @( @{Nome="Steam"; ID="Valve.Steam"; IsDefault=$false}, @{Nome="Epic Games Launcher"; ID="EpicGames.EpicGamesLauncher"; IsDefault=$false} );
+        "Audio" = @( @{Nome="Astro Command Center"; ID="9PFZ8RFZG5X4"; IsDefault=$false} )
+    }
+
+    $checkboxes = @()
+    $yPos = 10
+    $categoriasOrdenadas = $apps.Keys | Sort-Object
+    foreach ($cat in $categoriasOrdenadas) {
+        $groupBox = New-Object System.Windows.Forms.GroupBox; $groupBox.Text = $cat; $groupBox.Location = New-Object System.Drawing.Point(10, $yPos); $groupBox.Size = New-Object System.Drawing.Size(730, 100); $groupBox.Font = New-Object System.Drawing.Font('Segoe UI', 9, [System.Drawing.FontStyle]::Bold); $mainPanel.Controls.Add($groupBox)
+        $flowLayoutPanel = New-Object System.Windows.Forms.FlowLayoutPanel; $flowLayoutPanel.Dock = [System.Windows.Forms.DockStyle]::Fill; $flowLayoutPanel.FlowDirection = 'LeftToRight'; $groupBox.Controls.Add($flowLayoutPanel)
+        $appsNestaCategoria = $apps[$cat] | Sort-Object Nome
+        foreach ($app in $appsNestaCategoria) {
+            $checkBox = New-Object System.Windows.Forms.CheckBox; $checkBox.Text = $app.Nome; $checkBox.Tag = $app; $checkBox.AutoSize = $true; $checkBox.Font = New-Object System.Drawing.Font('Segoe UI', 9, [System.Drawing.FontStyle]::Regular); $checkBox.Padding = New-Object System.Windows.Forms.Padding(10, 5, 10, 5); $flowLayoutPanel.Controls.Add($checkBox); $checkboxes += $checkBox
+        }
+        $requiredHeight = $flowLayoutPanel.GetPreferredSize([System.Drawing.Size]::new(700, 0)).Height + 30; $groupBox.Height = $requiredHeight; $yPos += $groupBox.Height + 10
+    }
+
+    $actionPanel = New-Object System.Windows.Forms.Panel; $actionPanel.Location = New-Object System.Drawing.Point(20, 450); $actionPanel.Size = New-Object System.Drawing.Size(760, 60); $mainForm.Controls.Add($actionPanel)
+    $installButton = New-Object System.Windows.Forms.Button; $installButton.Text = 'Instalar Selecionados'; $installButton.Size = New-Object System.Drawing.Size(150, 35); $installButton.Location = New-Object System.Drawing.Point(0, 10); $installButton.BackColor = [System.Drawing.Color]::LightGreen; $actionPanel.Controls.Add($installButton)
+    $selectDefaultButton = New-Object System.Windows.Forms.Button; $selectDefaultButton.Text = 'Selecionar Padrao'; $selectDefaultButton.Size = New-Object System.Drawing.Size(130, 35); $selectDefaultButton.Location = New-Object System.Drawing.Point(160, 10); $actionPanel.Controls.Add($selectDefaultButton)
+    $selectAllButton = New-Object System.Windows.Forms.Button; $selectAllButton.Text = 'Selecionar Todos'; $selectAllButton.Size = New-Object System.Drawing.Size(130, 35); $selectAllButton.Location = New-Object System.Drawing.Point(300, 10); $actionPanel.Controls.Add($selectAllButton)
+    $deselectAllButton = New-Object System.Windows.Forms.Button; $deselectAllButton.Text = 'Limpar Selecao'; $deselectAllButton.Size = New-Object System.Drawing.Size(130, 35); $deselectAllButton.Location = New-Object System.Drawing.Point(440, 10); $actionPanel.Controls.Add($deselectAllButton)
+    $activatorButton = New-Object System.Windows.Forms.Button; $activatorButton.Text = 'Rodar Ativador'; $activatorButton.Size = New-Object System.Drawing.Size(120, 35); $activatorButton.Location = New-Object System.Drawing.Point(620, 10); $activatorButton.BackColor = [System.Drawing.Color]::LightCoral; $actionPanel.Controls.Add($activatorButton)
+    
+    #endregion
+
+    #region EVENT HANDLERS - Logica dos Botoes
+
+    ### MUDANÇA PRINCIPAL: O TIMER AGORA GERENCIA A FILA ###
+    $jobCheckTimer = New-Object System.Windows.Forms.Timer
+    $jobCheckTimer.Interval = 1000 # Verifica a cada 1 segundo
+
+    $jobCheckTimer.Add_Tick({
+        # 1. Verifica se ha um trabalho em andamento
+        if ($null -ne $script:installJob) {
+            Receive-Job -Job $script:installJob | ForEach-Object { Log-Message $_ }
+
+            # Se o trabalho terminou, limpa para o proximo
+            if ($script:installJob.State -in @('Completed', 'Failed', 'Stopped')) {
+                Remove-Job -Job $script:installJob
+                $script:installJob = $null
+            }
+        }
+
+        # 2. Se NAO ha trabalho rodando E a fila TEM itens, inicia o proximo
+        if ($null -eq $script:installJob -and $script:installQueue.Count -gt 0) {
+            $appParaInstalar = $script:installQueue.Dequeue()
+            Log-Message "`n------------------------------------------------------------"
+            Log-Message "Iniciando instalacao de: $($appParaInstalar.Nome)"
+            
+            # Inicia um job para um UNICO aplicativo
+            $script:installJob = Start-Job -ScriptBlock {
+                param($app)
+                
+                Write-Output "--- Instalando $($app.Nome) ($($app.ID)) ---"
+                $wingetArgs = @("install", "--id", $app.ID, "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity")
+                if (($app.ID -match "^\w{12}$") -and ($app.ID -ne "Microsoft.Office")) {
+                    $wingetArgs += "--source", "msstore"
+                    Write-Output "INFO: ID detectado como da Microsoft Store. Especificando --source msstore."
+                }
+                Write-Output "COMANDO: winget $($wingetArgs -join ' ')"
+                try {
+                    & winget @wingetArgs | ForEach-Object { Write-Output "  $_" }
+                    if ($LASTEXITCODE -ne 0) { Write-Warning "Falha ao instalar $($app.Nome). Codigo de saida: $LASTEXITCODE" }
+                    else { Write-Output "$($app.Nome) instalado com sucesso." }
+                } catch {
+                    Write-Warning "ERRO: Falha critica ao instalar $($app.Nome). $($_.Exception.Message)"
+                }
+            } -ArgumentList $appParaInstalar
+        }
+
+        # 3. Se NAO ha trabalho rodando E a fila esta VAZIA, terminamos.
+        if ($null -eq $script:installJob -and $script:installQueue.Count -eq 0) {
+            $jobCheckTimer.Stop()
+            Log-Message "`n------------------------------------------------------------"
+            Log-Message "Todas as instalacoes foram concluidas."
+            $actionPanel.Controls | ForEach-Object { $_.Enabled = $true }
+        }
+    })
+
+    ### MUDANÇA PRINCIPAL: O BOTAO DE INSTALAR APENAS PREPARA A FILA E LIGA O TIMER ###
+    $installButton.Add_Click({
+        $selectedApps = $checkboxes | Where-Object { $_.Checked } | Select-Object -ExpandProperty Tag
+
+        if ($selectedApps.Count -eq 0) {
+            [System.Windows.Forms.MessageBox]::Show("Nenhum aplicativo selecionado para instalacao.", "Aviso", "OK", "Warning")
+            return
+        }
+        
+        # 1. Limpa a fila antiga e preenche com os novos itens
+        $script:installQueue.Clear()
+        $selectedApps | ForEach-Object { $script:installQueue.Enqueue($_) }
+
+        # 2. Prepara a UI
+        $actionPanel.Controls | ForEach-Object { $_.Enabled = $false }
+        $logTextBox.Clear()
+        Log-Message "Iniciando processo de instalacao em fila..."
+        
+        # 3. Apenas liga o Timer. O Timer agora faz todo o trabalho pesado.
+        $jobCheckTimer.Start()
+    })
+
+    $activatorButton.Add_Click({
+        $confirmation = [System.Windows.Forms.MessageBox]::Show("AVISO DE SEGURANCA:`n`nVoce esta prestes a executar um script de ativacao baixado da internet (`get.activated.win`). Executar scripts de fontes nao confiaveis pode ser perigoso.`n`nDeseja continuar?","Confirmacao de Seguranca", "YesNo", "Warning")
+        if ($confirmation -eq 'No') { Log-Message "Operacao do ativador cancelada pelo usuario."; return }
+        $logTextBox.Clear(); Log-Message "Executando o ativador..."; $activatorButton.Enabled = $false
+        try { Invoke-RestMethod -Uri "https://get.activated.win" | Invoke-Expression; Log-Message "Comando do ativador concluido com sucesso." }
+        catch { Log-Message "ERRO: Falha ao executar o ativador: $($_.Exception.Message)" }
+        finally { $activatorButton.Enabled = $true }
+    })
+
+    $selectDefaultButton.Add_Click({ foreach ($cb in $checkboxes) { if ($cb.Tag.IsDefault) { $cb.Checked = $true } } })
+    $selectAllButton.Add_Click({ foreach ($cb in $checkboxes) { $cb.Checked = $true } })
+    $deselectAllButton.Add_Click({ foreach ($cb in $checkboxes) { $cb.Checked = $false } })
+
+    $mainForm.Add_FormClosing({
+        $jobCheckTimer.Stop()
+        if($null -ne $script:installJob) { Remove-Job -Job $script:installJob -Force }
+    })
+    #endregion
+
+    #region EXECUTION - Exibe o formulario
+    $mainForm.ShowDialog()
+    #endregion
+}
+finally {
+    # Garante a limpeza do arquivo temporario.
+    if ($MyInvocation.MyCommand.Path -and $MyInvocation.MyCommand.Path.StartsWith($env:TEMP)) {
+        Remove-Item $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyContinue
+    }
+}
