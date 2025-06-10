@@ -1,3 +1,23 @@
+# Verifica se o script está sendo executado como Administrador
+if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")) {
+    Write-Host "Reiniciando com privilégios de administrador..." -ForegroundColor Yellow
+    Start-Sleep -Seconds 1
+
+    # Relança o script atual com elevação
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = "powershell"
+    $psi.Arguments = "-ExecutionPolicy Bypass -NoProfile -File `"$PSCommandPath`""
+    $psi.Verb = "runas"
+
+    try {
+        [System.Diagnostics.Process]::Start($psi) | Out-Null
+    } catch {
+        Write-Error "Execução como administrador cancelada ou falhou: $_"
+    }
+
+    exit
+}
+
 # Define um dicionário ($apps) com categorias como chaves e listas de aplicativos como valores.
 # Cada aplicativo é representado por um objeto com propriedades Nome e ID (usada para instalar via winget).
 $apps = @{
