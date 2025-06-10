@@ -1,18 +1,66 @@
 #region INFO
 <#
 .SYNOPSIS
-    Instalador de aplicativos e utilitário de sistema com interface gráfica (GUI).
+    Instalador de aplicativos e utilitario de sistema com interface grafica (GUI).
 .DESCRIPTION
-    Este script apresenta uma interface gráfica criada com Windows Forms para permitir
-    ao usuário selecionar e instalar aplicativos via Winget.
+    Este script apresenta uma interface grafica criada com Windows Forms para permitir
+    ao usuario selecionar e instalar aplicativos via Winget.
 .AUTHOR
     Adaptado por Gemini
 .VERSION
-    2.3 (Final - Lógica do Timer Corrigida)
+    2.5 (Versao sem acentuacao para maxima compatibilidade)
 #>
 #endregion INFO
 
-#region DATA - Definição dos Aplicativos
+# Define a codificacao padrao para a saida de comandos, uma boa pratica.
+$PSDefaultParameterValues['*:Encoding'] = 'utf8'
+
+$script:installJob = $null
+
+#region GUI - Criação da Interface Grafica com Windows Forms
+
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+
+$mainForm = New-Object System.Windows.Forms.Form
+$mainForm.Text = 'Pos Instalador de Aplicativos'
+$mainForm.Size = New-Object System.Drawing.Size(820, 750)
+$mainForm.StartPosition = 'CenterScreen'
+$mainForm.FormBorderStyle = 'FixedSingle'
+$mainForm.MaximizeBox = $false
+
+$logLabel = New-Object System.Windows.Forms.Label
+$logLabel.Text = "Log de Instalacao:"
+$logLabel.Location = New-Object System.Drawing.Point(20, 520)
+$logLabel.AutoSize = $true
+$mainForm.Controls.Add($logLabel)
+
+$logTextBox = New-Object System.Windows.Forms.TextBox
+$logTextBox.Location = New-Object System.Drawing.Point(20, 540)
+$logTextBox.Size = New-Object System.Drawing.Size(760, 150)
+$logTextBox.Multiline = $true
+$logTextBox.ScrollBars = 'Vertical'
+$logTextBox.ReadOnly = $true
+$logTextBox.Font = New-Object System.Drawing.Font('Consolas', 8)
+$mainForm.Controls.Add($logTextBox)
+
+function Log-Message {
+    param($Message)
+    if ($logTextBox.InvokeRequired) {
+        $logTextBox.Invoke([Action[string]]$logTextBox.AppendText, "$Message`r`n")
+    } else {
+        $logTextBox.AppendText("$Message`r`n")
+    }
+}
+
+$mainPanel = New-Object System.Windows.Forms.Panel
+$mainPanel.Location = New-Object System.Drawing.Point(20, 20)
+$mainPanel.Size = New-Object System.Drawing.Size(770, 420)
+$mainPanel.AutoScroll = $true
+$mainPanel.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
+$mainForm.Controls.Add($mainPanel)
+
+# Lista de apps sem acentuacao
 $apps = @{
     "Comunicacao" = @(
         @{Nome="WhatsApp"; ID="9NKSQGP7F2NH"; IsDefault=$false},
@@ -23,7 +71,7 @@ $apps = @{
         @{Nome="Brave"; ID="Brave.Brave"; IsDefault=$false},
         @{Nome="Firefox"; ID="Mozilla.Firefox"; IsDefault=$false}
     )
-    "Entreternimento" = @(
+    "Entretenimento" = @(
         @{Nome="VLC"; ID="VideoLAN.VLC"; IsDefault=$true},
         @{Nome="Spotify"; ID="Spotify.Spotify"; IsDefault=$false},
         @{Nome="Corel Draw"; ID="9PBL2KQXQ47K"; IsDefault=$false},
@@ -70,52 +118,6 @@ $apps = @{
         @{Nome="Astro Command Center"; ID="9PFZ8RFZG5X4"; IsDefault=$false}
     )
 }
-#endregion DATA
-
-$script:installJob = $null
-
-#region GUI - Criação da Interface Gráfica com Windows Forms
-
-Add-Type -AssemblyName System.Windows.Forms
-Add-Type -AssemblyName System.Drawing
-
-$mainForm = New-Object System.Windows.Forms.Form
-$mainForm.Text = 'Pós Instalador de Aplicativos'
-$mainForm.Size = New-Object System.Drawing.Size(820, 750)
-$mainForm.StartPosition = 'CenterScreen'
-$mainForm.FormBorderStyle = 'FixedSingle'
-$mainForm.MaximizeBox = $false
-
-$logLabel = New-Object System.Windows.Forms.Label
-$logLabel.Text = "Log de Instalação:"
-$logLabel.Location = New-Object System.Drawing.Point(20, 520)
-$logLabel.AutoSize = $true
-$mainForm.Controls.Add($logLabel)
-
-$logTextBox = New-Object System.Windows.Forms.TextBox
-$logTextBox.Location = New-Object System.Drawing.Point(20, 540)
-$logTextBox.Size = New-Object System.Drawing.Size(760, 150)
-$logTextBox.Multiline = $true
-$logTextBox.ScrollBars = 'Vertical'
-$logTextBox.ReadOnly = $true
-$logTextBox.Font = New-Object System.Drawing.Font('Consolas', 8)
-$mainForm.Controls.Add($logTextBox)
-
-function Log-Message {
-    param($Message)
-    if ($logTextBox.InvokeRequired) {
-        $logTextBox.Invoke([Action[string]]$logTextBox.AppendText, "$Message`r`n")
-    } else {
-        $logTextBox.AppendText("$Message`r`n")
-    }
-}
-
-$mainPanel = New-Object System.Windows.Forms.Panel
-$mainPanel.Location = New-Object System.Drawing.Point(20, 20)
-$mainPanel.Size = New-Object System.Drawing.Size(770, 420)
-$mainPanel.AutoScroll = $true
-$mainPanel.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
-$mainForm.Controls.Add($mainPanel)
 
 $checkboxes = @()
 $yPos = 10
@@ -164,7 +166,7 @@ $installButton.BackColor = [System.Drawing.Color]::LightGreen
 $actionPanel.Controls.Add($installButton)
 
 $selectDefaultButton = New-Object System.Windows.Forms.Button
-$selectDefaultButton.Text = 'Selecionar Padrão'
+$selectDefaultButton.Text = 'Selecionar Padrao'
 $selectDefaultButton.Size = New-Object System.Drawing.Size(130, 35)
 $selectDefaultButton.Location = New-Object System.Drawing.Point(160, 10)
 $actionPanel.Controls.Add($selectDefaultButton)
@@ -176,7 +178,7 @@ $selectAllButton.Location = New-Object System.Drawing.Point(300, 10)
 $actionPanel.Controls.Add($selectAllButton)
 
 $deselectAllButton = New-Object System.Windows.Forms.Button
-$deselectAllButton.Text = 'Limpar Seleção'
+$deselectAllButton.Text = 'Limpar Selecao'
 $deselectAllButton.Size = New-Object System.Drawing.Size(130, 35)
 $deselectAllButton.Location = New-Object System.Drawing.Point(440, 10)
 $actionPanel.Controls.Add($deselectAllButton)
@@ -189,46 +191,41 @@ $activatorButton.BackColor = [System.Drawing.Color]::LightCoral
 $actionPanel.Controls.Add($activatorButton)
 #endregion
 
-#region EVENT HANDLERS - Lógica dos Botões
+#region EVENT HANDLERS - Logica dos Botoes
 
-### MUDANÇA PRINCIPAL: O TIMER E SEU EVENTO SÃO DEFINIDOS AQUI UMA ÚNICA VEZ ###
 $jobCheckTimer = New-Object System.Windows.Forms.Timer
 $jobCheckTimer.Interval = 500
-# O evento Tick (o que o timer faz a cada 0.5s) é definido aqui.
+
 $jobCheckTimer.Add_Tick({
     if ($null -ne $script:installJob) {
         Receive-Job -Job $script:installJob | ForEach-Object { Log-Message $_ }
 
         if ($script:installJob.State -in @('Completed', 'Failed', 'Stopped')) {
-            Log-Message "`n--- Processo de instalação concluído. ---"
-            $jobCheckTimer.Stop() # Para o timer
+            Log-Message "`n--- Processo de instalacao concluido. ---"
+            $jobCheckTimer.Stop()
             
             Remove-Job -Job $script:installJob
-            $script:installJob = $null # Limpa a variável para a próxima execução
+            $script:installJob = $null
 
-            # Reabilita os botões
             $actionPanel.Controls | ForEach-Object { $_.Enabled = $true }
         }
     }
     else {
-        # Medida de segurança: se o job for nulo por algum motivo, para o timer.
         $jobCheckTimer.Stop()
     }
 })
 
-# --- Lógica do botão de Instalação (AGORA MUITO MAIS SIMPLES) ---
 $installButton.Add_Click({
     $selectedApps = $checkboxes | Where-Object { $_.Checked } | Select-Object -ExpandProperty Tag
 
     if ($selectedApps.Count -eq 0) {
-        [System.Windows.Forms.MessageBox]::Show("Nenhum aplicativo selecionado para instalação.", "Aviso", "OK", "Warning")
+        [System.Windows.Forms.MessageBox]::Show("Nenhum aplicativo selecionado para instalacao.", "Aviso", "OK", "Warning")
         return
     }
 
-    # Desabilita botões para evitar cliques duplos
     $actionPanel.Controls | ForEach-Object { $_.Enabled = $false }
     $logTextBox.Clear()
-    Log-Message "Iniciando a instalação..."
+    Log-Message "Iniciando a instalacao..."
 
     $script:installJob = Start-Job -ScriptBlock {
         param($appsToInstall)
@@ -239,42 +236,38 @@ $installButton.Add_Click({
             $wingetArgs = @("install", "--id", $app.ID, "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity", "--source", "winget")
 
             if (($app.ID -match "^\w{12}$") -and ($app.ID -ne "Microsoft.Office")) {
-                $wingetArgs[-1] = "msstore" # Troca a fonte para msstore
+                $wingetArgs[-1] = "msstore"
                 Write-Output "INFO: Usando a fonte 'msstore'."
             }
             
             Write-Output "COMANDO: winget $($wingetArgs -join ' ')"
             
             try {
-                # O '&' é usado para garantir que o winget seja executado e sua saída capturada
                 & winget @wingetArgs | ForEach-Object { Write-Output "  $_" }
                 if ($LASTEXITCODE -ne 0) {
-                    Write-Warning "Falha ao instalar $($app.Nome). Código de saída: $LASTEXITCODE"
+                    Write-Warning "Falha ao instalar $($app.Nome). Codigo de saida: $LASTEXITCODE"
                 } else {
                     Write-Output "$($app.Nome) instalado com sucesso."
                 }
             } catch {
-                Write-Warning "ERRO: Falha crítica ao instalar $($app.Nome). $($_.Exception.Message)"
+                Write-Warning "ERRO: Falha critica ao instalar $($app.Nome). $($_.Exception.Message)"
             }
         }
     } -ArgumentList $selectedApps
     
-    # Apenas inicia o timer que já existe e está configurado.
     $jobCheckTimer.Start()
 })
 
-
-# --- Lógica do botão do Ativador ---
 $activatorButton.Add_Click({
     $confirmation = [System.Windows.Forms.MessageBox]::Show(
-        "AVISO DE SEGURANÇA:`n`nVocê está prestes a executar um script de ativação baixado da internet (`get.activated.win`). Executar scripts de fontes não confiáveis pode ser perigoso.`n`nDeseja continuar?",
-        "Confirmação de Segurança", 
+        "AVISO DE SEGURANCA:`n`nVoce esta prestes a executar um script de ativacao baixado da internet (`get.activated.win`). Executar scripts de fontes nao confiaveis pode ser perigoso.`n`nDeseja continuar?",
+        "Confirmacao de Seguranca", 
         "YesNo", 
         "Warning"
     )
 
     if ($confirmation -eq 'No') {
-        Log-Message "Operação do ativador cancelada pelo usuário."
+        Log-Message "Operacao do ativador cancelada pelo usuario."
         return
     }
 
@@ -284,7 +277,7 @@ $activatorButton.Add_Click({
 
     try {
         Invoke-RestMethod -Uri "https://get.activated.win" | Invoke-Expression
-        Log-Message "Comando do ativador concluído com sucesso."
+        Log-Message "Comando do ativador concluido com sucesso."
     } catch {
         Log-Message "ERRO: Falha ao executar o ativador: $($_.Exception.Message)"
     } finally {
@@ -292,8 +285,6 @@ $activatorButton.Add_Click({
     }
 })
 
-
-# --- Lógica dos botões auxiliares ---
 $selectDefaultButton.Add_Click({
     foreach ($cb in $checkboxes) {
         if ($cb.Tag.IsDefault) {
@@ -314,9 +305,7 @@ $deselectAllButton.Add_Click({
     }
 })
 
-# --- Evento para fechar o formulário ---
 $mainForm.Add_FormClosing({
-    # Garante que o timer e o job sejam parados e removidos ao fechar a janela
     $jobCheckTimer.Stop()
     if($null -ne $script:installJob) {
         Remove-Job -Job $script:installJob -Force
@@ -324,6 +313,6 @@ $mainForm.Add_FormClosing({
 })
 #endregion
 
-#region EXECUTION - Exibe o formulário
+#region EXECUTION - Exibe o formulario
 $mainForm.ShowDialog()
-#endregion
+#endregionz
