@@ -1,327 +1,329 @@
-# Define um dicionário ($apps) com categorias como chaves e listas de aplicativos como valores.
-# Cada aplicativo é representado por um objeto com propriedades Nome e ID (usada para instalar via winget).
+#region INFO
+<#
+.SYNOPSIS
+    Instalador de aplicativos e utilitário de sistema com interface gráfica (GUI).
+.DESCRIPTION
+    Este script apresenta uma interface gráfica criada com Windows Forms para permitir
+    ao usuário selecionar e instalar aplicativos via Winget.
+.AUTHOR
+    Adaptado por Gemini
+.VERSION
+    2.3 (Final - Lógica do Timer Corrigida)
+#>
+#endregion INFO
+
+#region DATA - Definição dos Aplicativos
 $apps = @{
     "Comunicacao" = @(
-        @{Nome="WhatsApp"; ID="9NKSQGP7F2NH"} # ID da Microsoft Store para WhatsApp
-        @{Nome="Discord"; ID="Discord.Discord"}
+        @{Nome="WhatsApp"; ID="9NKSQGP7F2NH"; IsDefault=$false},
+        @{Nome="Discord"; ID="Discord.Discord"; IsDefault=$false}
     )
     "Navegador" = @(
-        @{Nome="Chrome"; ID="Google.Chrome"} # Aplicativo do conjunto Padrao
-        @{Nome="Brave"; ID="Brave.Brave"}
-        @{Nome="Firefox"; ID="Mozilla.Firefox"}
+        @{Nome="Chrome"; ID="Google.Chrome"; IsDefault=$true},
+        @{Nome="Brave"; ID="Brave.Brave"; IsDefault=$false},
+        @{Nome="Firefox"; ID="Mozilla.Firefox"; IsDefault=$false}
     )
     "Entreternimento" = @(
-        @{Nome="VLC"; ID="VideoLAN.VLC"} # Aplicativo do conjunto Padrao
-        @{Nome="Spotify"; ID="Spotify.Spotify"}
-        @{Nome="Corel Draw"; ID="9PBL2KQXQ47K"}
-        @{Nome="Stremio"; ID="Stremio.Stremio"}
+        @{Nome="VLC"; ID="VideoLAN.VLC"; IsDefault=$true},
+        @{Nome="Spotify"; ID="Spotify.Spotify"; IsDefault=$false},
+        @{Nome="Corel Draw"; ID="9PBL2KQXQ47K"; IsDefault=$false},
+        @{Nome="Stremio"; ID="Stremio.Stremio"; IsDefault=$false}
     )
     "Seguranca" = @(
-        @{Nome="WireGuard"; ID="WireGuard.WireGuard"}
-        @{Nome="Malwarebytes"; ID="Malwarebytes.Malwarebytes"}
+        @{Nome="WireGuard"; ID="WireGuard.WireGuard"; IsDefault=$false},
+        @{Nome="Malwarebytes"; ID="Malwarebytes.Malwarebytes"; IsDefault=$false}
     )
     "Produtividade" = @(
-        @{Nome="OneDrive"; ID="Microsoft.OneDrive"}
-        @{Nome="Notepad++"; ID="Notepad++.Notepad++"}
-        @{Nome="7zip"; ID="7zip.7zip"}
-        @{Nome="Microsoft Office"; ID="Microsoft.Office"} # Aplicativo do conjunto Padrao
-        @{Nome="LibreOffice"; ID="TheDocumentFoundation.LibreOffice"}
-        @{Nome="Asana"; ID="Asana.Asana"}
-        @{Nome="Trello"; ID="9NBLGGH4XXVW"}
+        @{Nome="OneDrive"; ID="Microsoft.OneDrive"; IsDefault=$false},
+        @{Nome="Notepad++"; ID="Notepad++.Notepad++"; IsDefault=$false},
+        @{Nome="7zip"; ID="7zip.7zip"; IsDefault=$false},
+        @{Nome="Microsoft Office"; ID="Microsoft.Office"; IsDefault=$true},
+        @{Nome="LibreOffice"; ID="TheDocumentFoundation.LibreOffice"; IsDefault=$false},
+        @{Nome="Asana"; ID="Asana.Asana"; IsDefault=$false},
+        @{Nome="Trello"; ID="9NBLGGH4XXVW"; IsDefault=$false}
     )
     "Utilitarios" = @(
-        @{Nome="TreeSize Free"; ID="XP9M26RSCLNT88"}
-        @{Nome="PowerToys"; ID="Microsoft.PowerToys"}
-        @{Nome="LGHUB"; ID="Logitech.LGHUB"}
-        @{Nome="qBittorrent"; ID="qBittorrent.qBittorrent"}
-        @{Nome="Chocolatey"; ID="Chocolatey.Chocolatey"}
-        @{Nome="AnyDesk"; ID="anydesk.anydesk"}
-        @{Nome="Teamviewer"; ID="XPDM17HK323C4X"}
+        @{Nome="TreeSize Free"; ID="XP9M26RSCLNT88"; IsDefault=$false},
+        @{Nome="PowerToys"; ID="Microsoft.PowerToys"; IsDefault=$false},
+        @{Nome="LGHUB"; ID="Logitech.LGHUB"; IsDefault=$false},
+        @{Nome="qBittorrent"; ID="qBittorrent.qBittorrent"; IsDefault=$false},
+        @{Nome="Chocolatey"; ID="Chocolatey.Chocolatey"; IsDefault=$false},
+        @{Nome="AnyDesk"; ID="anydesk.anydesk"; IsDefault=$true},
+        @{Nome="Teamviewer"; ID="XPDM17HK323C4X"; IsDefault=$false}
     )
     "Desenvolvimento" = @(
-        @{Nome="Visual Studio Code"; ID="Microsoft.VisualStudioCode"}
-        @{Nome="Git"; ID="Git.Git"}
-        @{Nome="Python 3"; ID="9NCVDN91XZQP"}
-        @{Nome="Anaconda"; ID="Anaconda.Anaconda3"}
-        @{Nome="NodeJS"; ID="OpenJS.NodeJS"}
-        @{Nome="Cmake"; ID="Kitware.CMake"}
-        @{Nome="MongoDB Server"; ID="MongoDB.Server"}
-        @{Nome="MongoDB Tools"; ID="MongoDB.DatabaseTools"}
-        @{Nome="MSYS2"; ID="MSYS2.MSYS2"}
+        @{Nome="Visual Studio Code"; ID="Microsoft.VisualStudioCode"; IsDefault=$false},
+        @{Nome="Git"; ID="Git.Git"; IsDefault=$false},
+        @{Nome="Python 3"; ID="9NCVDN91XZQP"; IsDefault=$false},
+        @{Nome="Anaconda"; ID="Anaconda.Anaconda3"; IsDefault=$false},
+        @{Nome="NodeJS"; ID="OpenJS.NodeJS"; IsDefault=$false},
+        @{Nome="Cmake"; ID="Kitware.CMake"; IsDefault=$false},
+        @{Nome="MongoDB Server"; ID="MongoDB.Server"; IsDefault=$false},
+        @{Nome="MongoDB Tools"; ID="MongoDB.DatabaseTools"; IsDefault=$false},
+        @{Nome="MSYS2"; ID="MSYS2.MSYS2"; IsDefault=$false}
     )
     "Jogos" = @(
-        @{Nome="Steam"; ID="Valve.Steam"}
-        @{Nome="Epic Games Launcher"; ID="EpicGames.EpicGamesLauncher"}
+        @{Nome="Steam"; ID="Valve.Steam"; IsDefault=$false},
+        @{Nome="Epic Games Launcher"; ID="EpicGames.EpicGamesLauncher"; IsDefault=$false}
     )
     "Audio" = @(
-        @{Nome="Astro Command Center"; ID="9PFZ8RFZG5X4"} # Indicando que pode ser da Store
+        @{Nome="Astro Command Center"; ID="9PFZ8RFZG5X4"; IsDefault=$false}
     )
 }
+#endregion DATA
 
-# Função que exibe o menu principal para o usuário.
-function Show-Menu {
-    Clear-Host
-    Write-Host "============================"
-    Write-Host "       MENU PRINCIPAL       "
-    Write-Host "============================"
-    Write-Host "[0] Instalar programas"
-    Write-Host "[1] Rodar ativador"
-    Write-Host "[Q] Sair"
-    Write-Host "============================"
-    Write-Host "Pressione uma tecla para escolher a opcao:"
+$script:installJob = $null
+
+#region GUI - Criação da Interface Gráfica com Windows Forms
+
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+
+$mainForm = New-Object System.Windows.Forms.Form
+$mainForm.Text = 'Pós Instalador de Aplicativos'
+$mainForm.Size = New-Object System.Drawing.Size(820, 750)
+$mainForm.StartPosition = 'CenterScreen'
+$mainForm.FormBorderStyle = 'FixedSingle'
+$mainForm.MaximizeBox = $false
+
+$logLabel = New-Object System.Windows.Forms.Label
+$logLabel.Text = "Log de Instalação:"
+$logLabel.Location = New-Object System.Drawing.Point(20, 520)
+$logLabel.AutoSize = $true
+$mainForm.Controls.Add($logLabel)
+
+$logTextBox = New-Object System.Windows.Forms.TextBox
+$logTextBox.Location = New-Object System.Drawing.Point(20, 540)
+$logTextBox.Size = New-Object System.Drawing.Size(760, 150)
+$logTextBox.Multiline = $true
+$logTextBox.ScrollBars = 'Vertical'
+$logTextBox.ReadOnly = $true
+$logTextBox.Font = New-Object System.Drawing.Font('Consolas', 8)
+$mainForm.Controls.Add($logTextBox)
+
+function Log-Message {
+    param($Message)
+    if ($logTextBox.InvokeRequired) {
+        $logTextBox.Invoke([Action[string]]$logTextBox.AppendText, "$Message`r`n")
+    } else {
+        $logTextBox.AppendText("$Message`r`n")
+    }
 }
 
-# Função que lista os aplicativos disponíveis para instalação, com cores e em 4 colunas.
-function List-Apps {
-    $global:appIndexMap = @{}
-    $currentIndex = 1 
+$mainPanel = New-Object System.Windows.Forms.Panel
+$mainPanel.Location = New-Object System.Drawing.Point(20, 20)
+$mainPanel.Size = New-Object System.Drawing.Size(770, 420)
+$mainPanel.AutoScroll = $true
+$mainPanel.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
+$mainForm.Controls.Add($mainPanel)
 
-    $categoriasOrdenadas = $apps.Keys | Sort-Object
-    foreach ($cat in $categoriasOrdenadas) { # Loop de Categoria
-        Write-Host ""
-        Write-Host "--- Categoria: $cat ---" -ForegroundColor Yellow
+$checkboxes = @()
+$yPos = 10
+$categoriasOrdenadas = $apps.Keys | Sort-Object
 
-        $appsNestaCategoria = $apps[$cat] | Sort-Object Nome
-        
-        if ($appsNestaCategoria.Count -eq 0) {
-            Write-Host "  (Nenhum aplicativo nesta categoria)" -ForegroundColor DarkGray # Usando DarkGray para consistência
-            continue 
-        }
+foreach ($cat in $categoriasOrdenadas) {
+    $groupBox = New-Object System.Windows.Forms.GroupBox
+    $groupBox.Text = $cat
+    $groupBox.Location = New-Object System.Drawing.Point(10, $yPos)
+    $groupBox.Size = New-Object System.Drawing.Size(730, 100)
+    $groupBox.Font = New-Object System.Drawing.Font('Segoe UI', 9, [System.Drawing.FontStyle]::Bold)
+    $mainPanel.Controls.Add($groupBox)
 
-        # Coleta dados dos apps (Índice de Exibição, Nome do App) para esta categoria
-        $appDataList = New-Object System.Collections.Generic.List[object]
-        foreach ($app in $appsNestaCategoria) {
-            $appDataList.Add(@{ DisplayIndex = $currentIndex; AppName = $app.Nome })
-            $global:appIndexMap[$currentIndex] = $app.ID 
-            $currentIndex++
-        }
+    $flowLayoutPanel = New-Object System.Windows.Forms.FlowLayoutPanel
+    $flowLayoutPanel.Dock = [System.Windows.Forms.DockStyle]::Fill
+    $flowLayoutPanel.FlowDirection = 'LeftToRight'
+    $groupBox.Controls.Add($flowLayoutPanel)
 
-        # Exibe em colunas
-        $numColumns = 4
-        $itemPaddingWidth = 25 # Largura padrão para cada coluna (incluindo preenchimento)
+    $appsNestaCategoria = $apps[$cat] | Sort-Object Nome
+    foreach ($app in $appsNestaCategoria) {
+        $checkBox = New-Object System.Windows.Forms.CheckBox
+        $checkBox.Text = $app.Nome
+        $checkBox.Tag = $app
+        $checkBox.AutoSize = $true
+        $checkBox.Font = New-Object System.Drawing.Font('Segoe UI', 9, [System.Drawing.FontStyle]::Regular)
+        $checkBox.Padding = New-Object System.Windows.Forms.Padding(10, 5, 10, 5)
+        $flowLayoutPanel.Controls.Add($checkBox)
+        $checkboxes += $checkBox
+    }
+    
+    $requiredHeight = $flowLayoutPanel.GetPreferredSize([System.Drawing.Size]::new(700, 0)).Height + 30
+    $groupBox.Height = $requiredHeight
+    $yPos += $groupBox.Height + 10
+}
 
-        try {
-            $consoleCurrentWidth = $Host.UI.RawUI.WindowSize.Width
-            if ($consoleCurrentWidth -ge ($numColumns * 15)) { 
-                $itemPaddingWidth = [System.Math]::Floor($consoleCurrentWidth / $numColumns)
-                # Garante uma largura mínima e subtrai 1 para evitar quebras de linha prematuras na borda
-                $itemPaddingWidth = [System.Math]::Max(20, $itemPaddingWidth - 1) 
-            }
-        } catch {
-            # Mantém $itemPaddingWidth com o valor de fallback se $Host.UI.RawUI não for acessível
-        }
+$actionPanel = New-Object System.Windows.Forms.Panel
+$actionPanel.Location = New-Object System.Drawing.Point(20, 450)
+$actionPanel.Size = New-Object System.Drawing.Size(760, 60)
+$mainForm.Controls.Add($actionPanel)
 
-        for ($i = 0; $i -lt $appDataList.Count; $i++) { # Loop através dos apps na categoria atual
-            $appData = $appDataList[$i]
+$installButton = New-Object System.Windows.Forms.Button
+$installButton.Text = 'Instalar Selecionados'
+$installButton.Size = New-Object System.Drawing.Size(150, 35)
+$installButton.Location = New-Object System.Drawing.Point(0, 10)
+$installButton.BackColor = [System.Drawing.Color]::LightGreen
+$actionPanel.Controls.Add($installButton)
+
+$selectDefaultButton = New-Object System.Windows.Forms.Button
+$selectDefaultButton.Text = 'Selecionar Padrão'
+$selectDefaultButton.Size = New-Object System.Drawing.Size(130, 35)
+$selectDefaultButton.Location = New-Object System.Drawing.Point(160, 10)
+$actionPanel.Controls.Add($selectDefaultButton)
+
+$selectAllButton = New-Object System.Windows.Forms.Button
+$selectAllButton.Text = 'Selecionar Todos'
+$selectAllButton.Size = New-Object System.Drawing.Size(130, 35)
+$selectAllButton.Location = New-Object System.Drawing.Point(300, 10)
+$actionPanel.Controls.Add($selectAllButton)
+
+$deselectAllButton = New-Object System.Windows.Forms.Button
+$deselectAllButton.Text = 'Limpar Seleção'
+$deselectAllButton.Size = New-Object System.Drawing.Size(130, 35)
+$deselectAllButton.Location = New-Object System.Drawing.Point(440, 10)
+$actionPanel.Controls.Add($deselectAllButton)
+
+$activatorButton = New-Object System.Windows.Forms.Button
+$activatorButton.Text = 'Rodar Ativador'
+$activatorButton.Size = New-Object System.Drawing.Size(120, 35)
+$activatorButton.Location = New-Object System.Drawing.Point(620, 10)
+$activatorButton.BackColor = [System.Drawing.Color]::LightCoral
+$actionPanel.Controls.Add($activatorButton)
+#endregion
+
+#region EVENT HANDLERS - Lógica dos Botões
+
+### MUDANÇA PRINCIPAL: O TIMER E SEU EVENTO SÃO DEFINIDOS AQUI UMA ÚNICA VEZ ###
+$jobCheckTimer = New-Object System.Windows.Forms.Timer
+$jobCheckTimer.Interval = 500
+# O evento Tick (o que o timer faz a cada 0.5s) é definido aqui.
+$jobCheckTimer.Add_Tick({
+    if ($null -ne $script:installJob) {
+        Receive-Job -Job $script:installJob | ForEach-Object { Log-Message $_ }
+
+        if ($script:installJob.State -in @('Completed', 'Failed', 'Stopped')) {
+            Log-Message "`n--- Processo de instalação concluído. ---"
+            $jobCheckTimer.Stop() # Para o timer
             
-            $indexString = "[{0:D2}]" -f $appData.DisplayIndex
-            $nameString = " " + $appData.AppName # Adiciona um espaço antes do nome para separação
+            Remove-Job -Job $script:installJob
+            $script:installJob = $null # Limpa a variável para a próxima execução
 
-            # Imprime o índice em Vermelho
-            Write-Host -NoNewline $indexString -ForegroundColor Red
-            # Imprime o nome em Cinza
-            Write-Host -NoNewline $nameString -ForegroundColor Gray # "Gray" é um cinza claro. "DarkGray" é mais escuro.
+            # Reabilita os botões
+            $actionPanel.Controls | ForEach-Object { $_.Enabled = $true }
+        }
+    }
+    else {
+        # Medida de segurança: se o job for nulo por algum motivo, para o timer.
+        $jobCheckTimer.Stop()
+    }
+})
 
-            # Calcula e imprime o preenchimento para alinhar as colunas
-            $currentTextLength = $indexString.Length + $nameString.Length
-            $paddingCharsCount = $itemPaddingWidth - $currentTextLength
-            
-            if ($paddingCharsCount -gt 0) {
-                Write-Host -NoNewline (" " * $paddingCharsCount)
-            } elseif ($paddingCharsCount -lt 0) { 
-                # Se o texto for maior que a largura da coluna, adiciona um espaço para separação mínima
-                # se não for o último item na linha da grade de colunas.
-                if (((($i + 1) % $numColumns) -ne 0) -and ($i -ne ($appDataList.Count - 1))) {
-                    Write-Host -NoNewline " "
-                }
-            }
-            # Se $paddingCharsCount for 0, nenhum espaço extra é impresso.
+# --- Lógica do botão de Instalação (AGORA MUITO MAIS SIMPLES) ---
+$installButton.Add_Click({
+    $selectedApps = $checkboxes | Where-Object { $_.Checked } | Select-Object -ExpandProperty Tag
 
-            # Lógica para nova linha
-            if (((($i + 1) % $numColumns) -eq 0) -or ($i -eq ($appDataList.Count - 1))) {
-                Write-Host "" # Nova linha após $numColumns itens ou no último item
-            }
-        } # Fim do loop de apps na categoria
-    } # Fim do loop de categoria
-} # Fim da função List-Apps
-
-
-# Função que instala os aplicativos selecionados via winget.
-function Install-SelectedApps {
-    param([int[]]$selected)
-    if (-not $selected -or $selected.Count -eq 0) {
-        Write-Warning "Nenhum numero valido selecionado para instalacao."
+    if ($selectedApps.Count -eq 0) {
+        [System.Windows.Forms.MessageBox]::Show("Nenhum aplicativo selecionado para instalação.", "Aviso", "OK", "Warning")
         return
     }
-    foreach ($num in $selected) {
-        if ($global:appIndexMap.ContainsKey($num)) { 
-            $id = $global:appIndexMap[$num]        
-            $appName = ($apps.GetEnumerator() | ForEach-Object { $_.Value } | Where-Object { $_.ID -eq $id } | Select-Object -First 1).Nome
-            Write-Host "Instalando $appName ($id)..." -ForegroundColor Green
-            
-            $wingetArgs = @("install", "--id", $id, "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity")
 
-            if (($id -match "^\w{12}$") -and ($id -ne "Microsoft.Office")) { 
-                $wingetArgs += "--source", "msstore"
-                Write-Host "Usando fonte msstore para $appName ($id)" -ForegroundColor DarkCyan
+    # Desabilita botões para evitar cliques duplos
+    $actionPanel.Controls | ForEach-Object { $_.Enabled = $false }
+    $logTextBox.Clear()
+    Log-Message "Iniciando a instalação..."
+
+    $script:installJob = Start-Job -ScriptBlock {
+        param($appsToInstall)
+        
+        foreach ($app in $appsToInstall) {
+            Write-Output "`n--- Instalando $($app.Nome) ($($app.ID)) ---"
+            
+            $wingetArgs = @("install", "--id", $app.ID, "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity", "--source", "winget")
+
+            if (($app.ID -match "^\w{12}$") -and ($app.ID -ne "Microsoft.Office")) {
+                $wingetArgs[-1] = "msstore" # Troca a fonte para msstore
+                Write-Output "INFO: Usando a fonte 'msstore'."
             }
             
-            Write-Host "Comando: winget $($wingetArgs -join ' ')" -ForegroundColor DarkGray
-            $processInfo = Start-Process winget -ArgumentList $wingetArgs -Wait -PassThru -NoNewWindow
+            Write-Output "COMANDO: winget $($wingetArgs -join ' ')"
             
-            if ($processInfo.ExitCode -ne 0) {
-                Write-Warning "Falha ao instalar $appName ($id). Código de saída: $($processInfo.ExitCode)"
-            } else {
-                Write-Host "$appName instalado com sucesso." -ForegroundColor Green
+            try {
+                # O '&' é usado para garantir que o winget seja executado e sua saída capturada
+                & winget @wingetArgs | ForEach-Object { Write-Output "  $_" }
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Warning "Falha ao instalar $($app.Nome). Código de saída: $LASTEXITCODE"
+                } else {
+                    Write-Output "$($app.Nome) instalado com sucesso."
+                }
+            } catch {
+                Write-Warning "ERRO: Falha crítica ao instalar $($app.Nome). $($_.Exception.Message)"
             }
-        } else {
-            Write-Warning "Opcao $num invalida."
         }
-    }
-}
+    } -ArgumentList $selectedApps
+    
+    # Apenas inicia o timer que já existe e está configurado.
+    $jobCheckTimer.Start()
+})
 
-# Função que executa um ativador.
-function Run-Activator {
-    Write-Host "Executando ativador via PowerShell..." -ForegroundColor Yellow
+
+# --- Lógica do botão do Ativador ---
+$activatorButton.Add_Click({
+    $confirmation = [System.Windows.Forms.MessageBox]::Show(
+        "AVISO DE SEGURANÇA:`n`nVocê está prestes a executar um script de ativação baixado da internet (`get.activated.win`). Executar scripts de fontes não confiáveis pode ser perigoso.`n`nDeseja continuar?",
+        "Confirmação de Segurança", 
+        "YesNo", 
+        "Warning"
+    )
+
+    if ($confirmation -eq 'No') {
+        Log-Message "Operação do ativador cancelada pelo usuário."
+        return
+    }
+
+    $logTextBox.Clear()
+    Log-Message "Executando o ativador..."
+    $activatorButton.Enabled = $false
+
     try {
         Invoke-RestMethod -Uri "https://get.activated.win" | Invoke-Expression
-        Write-Host "Comando do ativador concluido." -ForegroundColor Green
+        Log-Message "Comando do ativador concluído com sucesso."
     } catch {
-        Write-Error "Falha ao executar o ativador: $($_.Exception.Message)"
+        Log-Message "ERRO: Falha ao executar o ativador: $($_.Exception.Message)"
+    } finally {
+        $activatorButton.Enabled = $true
     }
-    Write-Host "Pressione qualquer tecla para continuar..."
-    [void][System.Console]::ReadKey($true)
-}
+})
 
-# Loop principal do script.
-while ($true) {
-    Show-Menu
-    $key = [System.Console]::ReadKey($true)
-    $keyChar = $key.KeyChar.ToString().Trim().ToUpper()
 
-    switch ($keyChar) {
-        "0" {
-            Clear-Host
-            Write-Host "Lista de programas disponiveis para instalacao:" -ForegroundColor Magenta
-            List-Apps
-
-            do {
-                Write-Host ""
-                Write-Host "Digite os numeros dos programas (separados por espaco)," -ForegroundColor White
-                Write-Host "ou uma das seguintes opcoes:" -ForegroundColor White
-                Write-Host "  [L]      Listar os programas novamente" -ForegroundColor Cyan
-                Write-Host "  [Q]      Cancelar e voltar ao menu principal" -ForegroundColor Cyan
-                Write-Host "  [Padrao] Instalar o conjunto padrao (Chrome, VLC, Office)" -ForegroundColor Cyan
-                Write-Host "Digite a selecao e pressione ENTER:" -ForegroundColor White
-
-                $userInputFromHost = Read-Host 
-
-                if ($userInputFromHost -eq $null) { 
-                    Write-Warning "Nenhuma entrada detectada. Tente novamente ou digite L, Q ou Padrao."
-                    Start-Sleep -Seconds 1
-                    continue
-                }
-
-                $userInputUpper = $userInputFromHost.Trim().ToUpper() 
-
-                if ($userInputUpper -eq "Q") {
-                    Write-Host "Instalacao cancelada. Retornando ao menu principal..." -ForegroundColor Yellow
-                    Start-Sleep -Seconds 1
-                    break 
-                }
-
-                if ($userInputUpper -eq "L") {
-                    Clear-Host
-                    Write-Host "Lista de programas disponiveis para instalacao:" -ForegroundColor Magenta
-                    List-Apps
-                    continue 
-                }
-
-                if ($userInputUpper -eq "PADRAO") {
-                    Write-Host "`nIniciando instalacao do conjunto padrao (Chrome, VLC, Microsoft Office, Anydesk)..." -ForegroundColor Green
-                    $defaultAppNamesToInstall = @("Chrome", "VLC", "Microsoft Office", "AnyDesk") 
-                    $numbersForDefaultSet = New-Object System.Collections.Generic.List[int]
-
-                    if ($global:appIndexMap.Count -gt 0) {
-                        foreach ($displayIndexKey in ($global:appIndexMap.Keys | Sort-Object {[int]$_})) {
-                            $appIDFromMap = $global:appIndexMap[$displayIndexKey]
-                            $currentAppNameFromMap = $null
-                            foreach($categoryKeyGlobal in $apps.Keys){
-                                $foundAppGlobal = $apps[$categoryKeyGlobal] | Where-Object {$_.ID -eq $appIDFromMap} | Select-Object -First 1
-                                if($foundAppGlobal){
-                                    $currentAppNameFromMap = $foundAppGlobal.Nome
-                                    break
-                                }
-                            }
-                            if($currentAppNameFromMap -and ($defaultAppNamesToInstall -contains $currentAppNameFromMap)){
-                                $numbersForDefaultSet.Add([int]$displayIndexKey)
-                            }
-                        }
-                    }
-
-                    if ($numbersForDefaultSet.Count -gt 0) {
-                        Install-SelectedApps -selected ($numbersForDefaultSet.ToArray()) 
-                        Write-Host "`nInstalacao do conjunto padrao solicitada. Verifique o status acima." -ForegroundColor Green
-                    } else {
-                        Write-Warning "Nao foi possivel encontrar todos os aplicativos do conjunto padrao na lista atual."
-                    }
-                    Write-Host "Voce pode selecionar mais aplicativos, ou digitar L, Q, Padrao." 
-                    Start-Sleep -Seconds 1
-                    continue 
-                }
-                
-                $maxIndex = 0
-                if ($global:appIndexMap.Keys.Count -gt 0) { 
-                     $maxIndex = ($global:appIndexMap.Keys | ForEach-Object { [int]$_ } | Measure-Object -Maximum).Maximum
-                } else {
-                    Write-Warning "Mapa de aplicativos esta vazio. Nao e possivel selecionar por numero."
-                    continue
-                }
-                
-                $invalidEntries = New-Object System.Collections.ArrayList 
-                
-                [int[]]$numsToInstall = $userInputFromHost -split '\s+' | ForEach-Object {
-                    if ($_ -match '^\d+$') {
-                        $numVal = [int]$_
-                        if ($numVal -ge 1 -and $numVal -le $maxIndex) {
-                            $numVal 
-                        } else {
-                            [void]$invalidEntries.Add("$_ (fora do intervalo 1-$maxIndex)")
-                            $null 
-                        }
-                    } elseif (![string]::IsNullOrWhiteSpace($_)) { 
-                        [void]$invalidEntries.Add("$_ (nao e um numero)")
-                        $null 
-                    }
-                } | Where-Object { $_ -ne $null } | Get-Unique 
-
-                if ($invalidEntries.Count -gt 0) {
-                    Write-Warning "As seguintes entradas foram ignoradas: $($invalidEntries -join ', ')"
-                }
-
-                if ($numsToInstall.Length -eq 0) { 
-                    if ($invalidEntries.Count -eq 0 -and ![string]::IsNullOrWhiteSpace($userInputFromHost)) {
-                         Write-Warning "Nenhuma opcao numerica valida foi processada. Por favor, tente novamente."
-                    } elseif ([string]::IsNullOrWhiteSpace($userInputFromHost)) {
-                        Write-Warning "Nenhuma entrada detectada. Por favor, tente novamente."
-                    }
-                } else {
-                    Install-SelectedApps -selected $numsToInstall
-                    Write-Host "`nInstalacao(oes) solicitada(s). Verifique o status acima." -ForegroundColor Green
-                    Write-Host "Digite mais numeros, L, Q ou Padrao." 
-                }
-            } while ($true) 
-        }
-        "1" {
-            Run-Activator
-        }
-        "Q" {
-            Write-Host "`nSaindo..." -ForegroundColor Yellow
-            exit 
-        }
-        default {
-            Write-Warning "`nOpcao invalida, tente novamente."
-            Start-Sleep -Seconds 1
+# --- Lógica dos botões auxiliares ---
+$selectDefaultButton.Add_Click({
+    foreach ($cb in $checkboxes) {
+        if ($cb.Tag.IsDefault) {
+            $cb.Checked = $true
         }
     }
-}
+})
+
+$selectAllButton.Add_Click({
+    foreach ($cb in $checkboxes) {
+        $cb.Checked = $true
+    }
+})
+
+$deselectAllButton.Add_Click({
+    foreach ($cb in $checkboxes) {
+        $cb.Checked = $false
+    }
+})
+
+# --- Evento para fechar o formulário ---
+$mainForm.Add_FormClosing({
+    # Garante que o timer e o job sejam parados e removidos ao fechar a janela
+    $jobCheckTimer.Stop()
+    if($null -ne $script:installJob) {
+        Remove-Job -Job $script:installJob -Force
+    }
+})
+#endregion
+
+#region EXECUTION - Exibe o formulário
+$mainForm.ShowDialog()
+#endregion
