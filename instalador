@@ -1,34 +1,3 @@
-# Verifica se o script está sendo executado como Administrador
-if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")) {
-    Write-Host "Reiniciando com privilégios de administrador..." -ForegroundColor Yellow
-    Start-Sleep -Seconds 1
-
-    $scriptPath = $PSCommandPath
-
-    # Se $PSCommandPath estiver vazio (ex: chamado por iex), salva o conteúdo em um arquivo temporário
-    if (-not $scriptPath) {
-        $tempDir = "$env:TEMP\pos_instalador"
-        if (-not (Test-Path $tempDir)) { New-Item -ItemType Directory -Path $tempDir | Out-Null }
-
-        $scriptPath = "$tempDir\script_temp.ps1"
-        Invoke-RestMethod "https://posinstalador" -OutFile $scriptPath
-    }
-
-    # Prepara o relançamento com elevação
-    $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = "powershell"
-    $psi.Arguments = "-ExecutionPolicy Bypass -NoProfile -File `"$scriptPath`""
-    $psi.Verb = "runas"
-
-    try {
-        [System.Diagnostics.Process]::Start($psi) | Out-Null
-    } catch {
-        Write-Error "Execução como administrador cancelada ou falhou: $_"
-    }
-
-    exit
-}
-
 # Define um dicionário ($apps) com categorias como chaves e listas de aplicativos como valores.
 # Cada aplicativo é representado por um objeto com propriedades Nome e ID (usada para instalar via winget).
 $apps = @{
