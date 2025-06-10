@@ -3,10 +3,21 @@ if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdent
     Write-Host "Reiniciando com privilégios de administrador..." -ForegroundColor Yellow
     Start-Sleep -Seconds 1
 
-    # Relança o script atual com elevação
+    $scriptPath = $PSCommandPath
+
+    # Se $PSCommandPath estiver vazio (ex: chamado por iex), salva o conteúdo em um arquivo temporário
+    if (-not $scriptPath) {
+        $tempDir = "$env:TEMP\pos_instalador"
+        if (-not (Test-Path $tempDir)) { New-Item -ItemType Directory -Path $tempDir | Out-Null }
+
+        $scriptPath = "$tempDir\script_temp.ps1"
+        Invoke-RestMethod "https://posinstalador" -OutFile $scriptPath
+    }
+
+    # Prepara o relançamento com elevação
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = "powershell"
-    $psi.Arguments = "-ExecutionPolicy Bypass -NoProfile -File `"$PSCommandPath`""
+    $psi.Arguments = "-ExecutionPolicy Bypass -NoProfile -File `"$scriptPath`""
     $psi.Verb = "runas"
 
     try {
