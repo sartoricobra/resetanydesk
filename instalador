@@ -33,12 +33,104 @@ try {
     .SYNOPSIS
         Instalador de aplicativos e utilitario de sistema com interface grafica (GUI).
     .DESCRIPTION
-        Usa botoes clicaveis em vez de checkboxes para uma interface mais moderna.
+        Usa botoes clicaveis e inclui uma funcao para baixar e instalar o driver da NVIDIA.
     .AUTHOR
         Adaptado por Gemini
     .VERSION
-        6.6 (Correcao Critica de Ordem de Parametro no Job)
+        7.0 (Integracao com Instalador de Driver NVIDIA)
     #>
+    #endregion
+
+    ### FUNCAO DO DRIVER NVIDIA ###
+    #region Function Get-NvidiaDriver
+    function Get-NvidiaDriver {
+        [CmdletBinding()]
+        param (
+            [string]$DownloadPath = "$env:USERPROFILE\Downloads",
+            [string]$DriverType = "Game Ready",
+            [switch]$InstallSilently
+        )
+
+        Log-Message "--- Iniciando busca por driver da NVIDIA ---"
+
+        Log-Message "[1/5] Identificando a GPU NVIDIA instalada..."
+        try {
+            $gpu = Get-CimInstance -ClassName Win32_VideoController | Where-Object { $_.Name -like '*NVIDIA*' } | Select-Object -First 1
+            if (-not $gpu) {
+                Log-Message "ERRO: Nenhuma placa de video NVIDIA foi encontrada neste sistema."
+                return
+            }
+            $gpuName = $gpu.Name.Replace("NVIDIA ", "")
+            Log-Message "   GPU Encontrada: $gpuName"
+        }
+        catch {
+            Log-Message "ERRO: Falha ao obter informacoes da GPU. Verifique se o WMI esta funcionando corretamente."
+            return
+        }
+
+        Log-Message "[2/5] Buscando o driver mais recente no site da NVIDIA..."
+        $driverSearchUrl = "https://www.nvidia.com/Download/Find.aspx?lang=en-us"
+        
+        try {
+            $searchResponse = Invoke-RestMethod -Uri $driverSearchUrl -Method Post -Body @{
+                "pf"  = "1"; "q" = $gpuName; "d" = if ($DriverType -eq "Game Ready") { "1" } else { "2" }
+            }
+        }
+        catch {
+            Log-Message "ERRO: Falha ao conectar ao site da NVIDIA. Verifique sua conexao com a internet."
+            return
+        }
+
+        Log-Message "[3/5] Analisando resultados da busca..."
+        $latestDriver = $searchResponse.drivers | Sort-Object version -Descending | Select-Object -First 1
+        
+        if (-not $latestDriver) {
+            Log-Message "ERRO: Nenhum driver encontrado para '$gpuName'."
+            return
+        }
+        
+        $driverDetailsUrl = "https://www.nvidia.com" + $latestDriver.download_url
+        Log-Message "  Pagina de detalhes do driver encontrada."
+        Log-Message "  Versao: $($latestDriver.version)"
+        Log-Message "  Data de Lancamento: $($latestDriver.release_date)"
+
+        Log-Message "[4/5] Extraindo o link de download final..."
+        try {
+            $detailsPageHtml = Invoke-RestMethod -Uri $driverDetailsUrl -Method Get
+            $downloadLinkRegex = 'href="(.+?\.exe)"'
+            if ($detailsPageHtml -match $downloadLinkRegex) {
+                $finalDownloadUrl = $matches[1]
+                Log-Message "  Link de download extraido com sucesso!"
+            }
+            else {
+                Log-Message "ERRO: Nao foi possivel encontrar o link de download do .exe na pagina de detalhes."
+                return
+            }
+        }
+        catch {
+            Log-Message "ERRO: Falha ao acessar a pagina de detalhes do driver."
+            return
+        }
+
+        $fileName = Split-Path $finalDownloadUrl -Leaf
+        $destinationPath = Join-Path $DownloadPath $fileName
+        
+        Log-Message "[5/5] Baixando o driver para '$destinationPath'..."
+        Log-Message "  URL: $finalDownloadUrl"
+        Log-Message "  Isso pode levar varios minutos..."
+        
+        try {
+            Import-Module BitsTransfer
+            Start-BitsTransfer -Source $finalDownloadUrl -Destination $destinationPath -DisplayName "NVIDIA Driver Download" -Asynchronous
+        }
+        catch {
+            Log-Message "ERRO: Falha no download. Verifique se o servico BITS esta ativo."
+            return
+        }
+        
+        # O monitoramento do BITS será feito pelo timer principal
+        return $destinationPath # Retorna o caminho do arquivo para o instalador
+    }
     #endregion
 
     $PSDefaultParameterValues['*:Encoding'] = 'utf8'
@@ -62,13 +154,18 @@ try {
     $mainForm.FormBorderStyle = 'FixedSingle'
     $mainForm.MaximizeBox = $false
 
-    $mainPanel = New-Object System.Windows.Forms.Panel; $mainPanel.Location = New-Object System.Drawing.Point(20, 20); $mainPanel.Size = New-Object System.Drawing.Size(790, 540); $mainPanel.AutoScroll = $true; $mainPanel.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle; $mainForm.Controls.Add($mainPanel)
-    $actionPanel = New-Object System.Windows.Forms.Panel; $actionPanel.Location = New-Object System.Drawing.Point(20, 570); $actionPanel.Size = New-Object System.Drawing.Size(790, 60); $mainForm.Controls.Add($actionPanel)
-    $logLabel = New-Object System.Windows.Forms.Label; $logLabel.Text = "Log de Instalacao:"; $logLabel.Location = New-Object System.Drawing.Point(20, 640); $logLabel.AutoSize = $true; $mainForm.Controls.Add($logLabel)
-    $logTextBox = New-Object System.Windows.Forms.TextBox; $logTextBox.Location = New-Object System.Drawing.Point(20, 660); $logTextBox.Size = New-Object System.Drawing.Size(790, 225); $logTextBox.Multiline = $true; $logTextBox.ScrollBars = 'Vertical'; $logTextBox.ReadOnly = $true; $logTextBox.Font = New-Object System.Drawing.Font('Consolas', 8); $mainForm.Controls.Add($logTextBox)
+    $mainPanel = New-Object System.Windows.Forms.Panel; $mainPanel.Location = New-Object System.Drawing.Point(20, 20); $mainPanel.Size = New-Object System.Drawing.Size(790, 500); $mainPanel.AutoScroll = $true; $mainPanel.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle; $mainForm.Controls.Add($mainPanel)
+    
+    ### MUDANÇA DE LAYOUT: Painel de ações dividido em dois ###
+    $actionPanel = New-Object System.Windows.Forms.Panel; $actionPanel.Location = New-Object System.Drawing.Point(20, 530); $actionPanel.Size = New-Object System.Drawing.Size(790, 45); $mainForm.Controls.Add($actionPanel)
+    $specialTasksPanel = New-Object System.Windows.Forms.Panel; $specialTasksPanel.Location = New-Object System.Drawing.Point(20, 575); $specialTasksPanel.Size = New-Object System.Drawing.Size(790, 45); $mainForm.Controls.Add($specialTasksPanel)
+
+    $logLabel = New-Object System.Windows.Forms.Label; $logLabel.Text = "Log de Instalacao:"; $logLabel.Location = New-Object System.Drawing.Point(20, 625); $logLabel.AutoSize = $true; $mainForm.Controls.Add($logLabel)
+    $logTextBox = New-Object System.Windows.Forms.TextBox; $logTextBox.Location = New-Object System.Drawing.Point(20, 645); $logTextBox.Size = New-Object System.Drawing.Size(790, 240); $logTextBox.Multiline = $true; $logTextBox.ScrollBars = 'Vertical'; $logTextBox.ReadOnly = $true; $logTextBox.Font = New-Object System.Drawing.Font('Consolas', 8); $mainForm.Controls.Add($logTextBox)
     
     function Log-Message { param($Message); if ($logTextBox.InvokeRequired) { $logTextBox.Invoke([Action[string]]$logTextBox.AppendText, "$Message`r`n") } else { $logTextBox.AppendText("$Message`r`n") } }
     
+    # ... (código de definição dos $apps permanece o mesmo)
     $apps = @{
         "Comunicacao" = @( @{Nome="WhatsApp"; ID="9NKSQGP7F2NH"; IsDefault=$false}, @{Nome="Discord"; ID="Discord.Discord"; IsDefault=$false} );
         "Navegador" = @( @{Nome="Chrome"; ID="Google.Chrome"; IsDefault=$true}, @{Nome="Brave"; ID="Brave.Brave"; IsDefault=$false}, @{Nome="Firefox"; ID="Mozilla.Firefox"; IsDefault=$false} );
@@ -80,75 +177,127 @@ try {
         "Jogos" = @( @{Nome="Steam"; ID="Valve.Steam"; IsDefault=$false}, @{Nome="Epic Games Launcher"; ID="EpicGames.EpicGamesLauncher"; IsDefault=$false} );
         "Audio" = @( @{Nome="Astro Command Center"; ID="9PFZ8RFZG5X4"; IsDefault=$false} )
     }
-
-    $appButtons = @()
-    $yPos = 10
-    $categoriasOrdenadas = $apps.Keys | Sort-Object
-
+    
+    # ... (código de criação dos botões de apps permanece o mesmo)
+    $appButtons = @(); $yPos = 10; $categoriasOrdenadas = $apps.Keys | Sort-Object
     foreach ($cat in $categoriasOrdenadas) {
         $groupBox = New-Object System.Windows.Forms.GroupBox; $groupBox.Text = $cat; $groupBox.Location = New-Object System.Drawing.Point(10, $yPos); $groupBox.Size = New-Object System.Drawing.Size(760, 100); $groupBox.Font = New-Object System.Drawing.Font('Segoe UI', 9, [System.Drawing.FontStyle]::Bold); $mainPanel.Controls.Add($groupBox)
         $flowLayoutPanel = New-Object System.Windows.Forms.FlowLayoutPanel; $flowLayoutPanel.Dock = [System.Windows.Forms.DockStyle]::Fill; $flowLayoutPanel.FlowDirection = 'LeftToRight'; $groupBox.Controls.Add($flowLayoutPanel)
-
         $appsNestaCategoria = $apps[$cat] | Sort-Object Nome
         foreach ($app in $appsNestaCategoria) {
-            $appButton = New-Object System.Windows.Forms.Button
-            $appButton.Text = $app.Nome; $appButton.Tag = $app; $appButton.Size = New-Object System.Drawing.Size(170, 32); $appButton.Font = New-Object System.Drawing.Font('Segoe UI', 8.5)
-            $appButton.Margin = New-Object System.Windows.Forms.Padding(5); $appButton.BackColor = $defaultButtonColor; $appButton.FlatStyle = 'Flat'; $appButton.FlatAppearance.BorderSize = 1; $appButton.FlatAppearance.BorderColor = [System.Drawing.Color]::LightGray
+            $appButton = New-Object System.Windows.Forms.Button; $appButton.Text = $app.Nome; $appButton.Tag = $app; $appButton.Size = New-Object System.Drawing.Size(170, 32); $appButton.Font = New-Object System.Drawing.Font('Segoe UI', 8.5); $appButton.Margin = New-Object System.Windows.Forms.Padding(5); $appButton.BackColor = $defaultButtonColor; $appButton.FlatStyle = 'Flat'; $appButton.FlatAppearance.BorderSize = 1; $appButton.FlatAppearance.BorderColor = [System.Drawing.Color]::LightGray
             $appButton.Add_Click({ if ($this.BackColor -eq $selectedButtonColor) { $this.BackColor = $defaultButtonColor; $this.FlatAppearance.BorderColor = [System.Drawing.Color]::LightGray } else { $this.BackColor = $selectedButtonColor; $this.FlatAppearance.BorderColor = $selectedButtonBorderColor } })
             $flowLayoutPanel.Controls.Add($appButton); $appButtons += $appButton
         }
-        
         $requiredHeight = $flowLayoutPanel.GetPreferredSize([System.Drawing.Size]::new(740, 0)).Height + 30; $groupBox.Height = $requiredHeight; $yPos += $groupBox.Height + 10
     }
 
-    $installButton = New-Object System.Windows.Forms.Button; $installButton.Text = 'Instalar Selecionados'; $installButton.Size = New-Object System.Drawing.Size(150, 35); $installButton.Location = New-Object System.Drawing.Point(0, 10); $installButton.BackColor = [System.Drawing.Color]::FromArgb(67, 160, 71); $installButton.ForeColor = [System.Drawing.Color]::White; $actionPanel.Controls.Add($installButton)
-    $selectDefaultButton = New-Object System.Windows.Forms.Button; $selectDefaultButton.Text = 'Selecionar Padrao'; $selectDefaultButton.Size = New-Object System.Drawing.Size(130, 35); $selectDefaultButton.Location = New-Object System.Drawing.Point(160, 10); $actionPanel.Controls.Add($selectDefaultButton)
-    $selectAllButton = New-Object System.Windows.Forms.Button; $selectAllButton.Text = 'Selecionar Todos'; $selectAllButton.Size = New-Object System.Drawing.Size(130, 35); $selectAllButton.Location = New-Object System.Drawing.Point(300, 10); $actionPanel.Controls.Add($selectAllButton)
-    $deselectAllButton = New-Object System.Windows.Forms.Button; $deselectAllButton.Text = 'Limpar Selecao'; $deselectAllButton.Size = New-Object System.Drawing.Size(130, 35); $deselectAllButton.Location = New-Object System.Drawing.Point(440, 10); $actionPanel.Controls.Add($deselectAllButton)
-    $activatorButton = New-Object System.Windows.Forms.Button; $activatorButton.Text = 'Rodar Ativador'; $activatorButton.Size = New-Object System.Drawing.Size(120, 35); $activatorButton.Location = New-Object System.Drawing.Point(640, 10); $activatorButton.BackColor = [System.Drawing.Color]::LightCoral; $actionPanel.Controls.Add($activatorButton)
+    # Botões de ação principal
+    $installButton = New-Object System.Windows.Forms.Button; $installButton.Text = 'Instalar Selecionados'; $installButton.Size = New-Object System.Drawing.Size(150, 35); $installButton.Location = New-Object System.Drawing.Point(0, 5); $installButton.BackColor = [System.Drawing.Color]::FromArgb(67, 160, 71); $installButton.ForeColor = [System.Drawing.Color]::White; $actionPanel.Controls.Add($installButton)
+    $selectDefaultButton = New-Object System.Windows.Forms.Button; $selectDefaultButton.Text = 'Selecionar Padrao'; $selectDefaultButton.Size = New-Object System.Drawing.Size(130, 35); $selectDefaultButton.Location = New-Object System.Drawing.Point(160, 5); $actionPanel.Controls.Add($selectDefaultButton)
+    $selectAllButton = New-Object System.Windows.Forms.Button; $selectAllButton.Text = 'Selecionar Todos'; $selectAllButton.Size = New-Object System.Drawing.Size(130, 35); $selectAllButton.Location = New-Object System.Drawing.Point(300, 5); $actionPanel.Controls.Add($selectAllButton)
+    $deselectAllButton = New-Object System.Windows.Forms.Button; $deselectAllButton.Text = 'Limpar Selecao'; $deselectAllButton.Size = New-Object System.Drawing.Size(130, 35); $deselectAllButton.Location = New-Object System.Drawing.Point(440, 5); $actionPanel.Controls.Add($deselectAllButton)
+    
+    ### NOVO BOTÃO NVIDIA E BOTÃO ATIVADOR MOVUDO ###
+    $nvidiaButton = New-Object System.Windows.Forms.Button; $nvidiaButton.Text = 'Instalar Driver NVIDIA'; $nvidiaButton.Size = New-Object System.Drawing.Size(160, 35); $nvidiaButton.Location = New-Object System.Drawing.Point(0, 5); $nvidiaButton.BackColor = [System.Drawing.Color]::FromArgb(118, 185, 0); $nvidiaButton.ForeColor = [System.Drawing.Color]::White; $specialTasksPanel.Controls.Add($nvidiaButton)
+    $activatorButton = New-Object System.Windows.Forms.Button; $activatorButton.Text = 'Rodar Ativador'; $activatorButton.Size = New-Object System.Drawing.Size(120, 35); $activatorButton.Location = New-Object System.Drawing.Point(170, 5); $activatorButton.BackColor = [System.Drawing.Color]::LightCoral; $specialTasksPanel.Controls.Add($activatorButton)
     
     #endregion
 
-    #region EVENT HANDLERS - Logica dos Botoes
+    #region EVENT HANDLERS
     
-    $jobCheckTimer = New-Object System.Windows.Forms.Timer
-    $jobCheckTimer.Interval = 1000
+    $jobCheckTimer = New-Object System.Windows.Forms.Timer; $jobCheckTimer.Interval = 1000
     $jobCheckTimer.Add_Tick({
-        if ($null -ne $script:installJob) {
-            Receive-Job -Job $script:installJob | ForEach-Object { Log-Message $_ }
-            if ($script:installJob.State -in @('Completed', 'Failed', 'Stopped')) { Remove-Job -Job $script:installJob; $script:installJob = $null }
-        }
+        # ... (a lógica do timer de instalação de apps permanece a mesma)
+        if ($null -ne $script:installJob) { Receive-Job -Job $script:installJob | ForEach-Object { Log-Message $_ }; if ($script:installJob.State -in @('Completed', 'Failed', 'Stopped')) { Remove-Job -Job $script:installJob; $script:installJob = $null } }
         if ($null -eq $script:installJob -and $script:installQueue.Count -gt 0) {
-            $appParaInstalar = $script:installQueue.Dequeue()
-            Log-Message "`n------------------------------------------------------------"; Log-Message "Iniciando instalacao de: $($appParaInstalar.Nome)"
-            
-            $script:installJob = Start-Job -ScriptBlock {
-                ### CORREÇÃO CRÍTICA DE ORDEM ###
-                # A declaracao de param() DEVE ser a primeira linha do ScriptBlock.
-                param($app)
-
-                # A configuracao de codificacao vem DEPOIS do param().
-                [System.Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-                
-                Write-Output "--- Instalando $($app.Nome) ($($app.ID)) ---"
-                $wingetArgs = @("install", "--id", $app.ID, "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity")
-                if (($app.ID -match "^\w{12}$") -and ($app.ID -ne "Microsoft.Office")) { $wingetArgs += "--source", "msstore"; Write-Output "INFO: ID detectado como da Microsoft Store. Especificando --source msstore." }
-                Write-Output "COMANDO: winget $($wingetArgs -join ' ')"; try { & winget @wingetArgs | ForEach-Object { Write-Output "  $_" }; if ($LASTEXITCODE -ne 0) { Write-Warning "Falha ao instalar $($app.Nome). Codigo de saida: $LASTEXITCODE" } else { Write-Output "$($app.Nome) instalado com sucesso." } } catch { Write-Warning "ERRO: Falha critica ao instalar $($app.Nome). $($_.Exception.Message)" }
-            } -ArgumentList $appParaInstalar
+            $appParaInstalar = $script:installQueue.Dequeue(); Log-Message "`n------------------------------------------------------------"; Log-Message "Iniciando instalacao de: $($appParaInstalar.Nome)"
+            $script:installJob = Start-Job -ScriptBlock { param($app); [System.Console]::OutputEncoding = [System.Text.Encoding]::UTF8; Write-Output "--- Instalando $($app.Nome) ($($app.ID)) ---"; $wingetArgs = @("install", "--id", $app.ID, "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity"); if (($app.ID -match "^\w{12}$") -and ($app.ID -ne "Microsoft.Office")) { $wingetArgs += "--source", "msstore"; Write-Output "INFO: ID detectado como da Microsoft Store. Especificando --source msstore." }; Write-Output "COMANDO: winget $($wingetArgs -join ' ')"; try { & winget @wingetArgs | ForEach-Object { Write-Output "  $_" }; if ($LASTEXITCODE -ne 0) { Write-Warning "Falha ao instalar $($app.Nome). Codigo de saida: $LASTEXITCODE" } else { Write-Output "$($app.Nome) instalado com sucesso." } } catch { Write-Warning "ERRO: Falha critica ao instalar $($app.Nome). $($_.Exception.Message)" } } -ArgumentList $appParaInstalar
         }
-        if ($null -eq $script:installJob -and $script:installQueue.Count -eq 0) {
-            $jobCheckTimer.Stop(); Log-Message "`n------------------------------------------------------------"; Log-Message "Todas as instalacoes foram concluidas."; $actionPanel.Controls | ForEach-Object { $_.Enabled = $true }
-        }
+        if ($null -eq $script:installJob -and $script:installQueue.Count -eq 0) { $jobCheckTimer.Stop(); Log-Message "`n------------------------------------------------------------"; Log-Message "Todas as instalacoes foram concluidas."; $actionPanel.Controls | ForEach-Object { $_.Enabled = $true }; $specialTasksPanel.Controls | ForEach-Object { $_.Enabled = $true } }
     })
 
     $installButton.Add_Click({
+        # Desabilita todos os botões de ação
+        $actionPanel.Controls | ForEach-Object { $_.Enabled = $false }; $specialTasksPanel.Controls | ForEach-Object { $_.Enabled = $false }
         $selectedApps = $appButtons | Where-Object { $_.BackColor -eq $selectedButtonColor } | Select-Object -ExpandProperty Tag
-        if ($selectedApps.Count -eq 0) { [System.Windows.Forms.MessageBox]::Show("Nenhum aplicativo selecionado para instalacao.", "Aviso", "OK", "Warning"); return }
+        if ($selectedApps.Count -eq 0) { [System.Windows.Forms.MessageBox]::Show("Nenhum aplicativo selecionado para instalacao.", "Aviso", "OK", "Warning"); $actionPanel.Controls | ForEach-Object { $_.Enabled = $true }; $specialTasksPanel.Controls | ForEach-Object { $_.Enabled = $true }; return }
         $script:installQueue.Clear(); $selectedApps | ForEach-Object { $script:installQueue.Enqueue($_) }
-        $actionPanel.Controls | ForEach-Object { $_.Enabled = $false }; $logTextBox.Clear(); Log-Message "Iniciando processo de instalacao em fila..."
+        $logTextBox.Clear(); Log-Message "Iniciando processo de instalacao em fila..."
         $jobCheckTimer.Start()
     })
 
+    ### EVENTO DE CLIQUE PARA O NOVO BOTÃO NVIDIA ###
+    $nvidiaButton.Add_Click({
+        # Desabilita todos os botões de ação para evitar sobreposição
+        $actionPanel.Controls | ForEach-Object { $_.Enabled = $false }
+        $specialTasksPanel.Controls | ForEach-Object { $_.Enabled = $false }
+        $logTextBox.Clear()
+
+        # O scriptblock do job agora é mais complexo: ele contém a definição da função e a chamada a ela.
+        $script:installJob = Start-Job -ScriptBlock {
+            # É necessário redefinir a função Log-Message dentro do job,
+            # pois ele não tem acesso à função da janela principal. Ele usará Write-Output.
+            function Log-Message { param($Message) Write-Output $Message }
+            
+            # A definição completa da função Get-NvidiaDriver vai aqui dentro
+            function Get-NvidiaDriver {
+                [CmdletBinding()]
+                param (
+                    [string]$DownloadPath = "$env:USERPROFILE\Downloads",
+                    [string]$DriverType = "Game Ready",
+                    [switch]$InstallSilently
+                )
+                Log-Message "--- Iniciando busca por driver da NVIDIA ---"
+                Log-Message "[1/5] Identificando a GPU NVIDIA instalada..."
+                try {
+                    $gpu = Get-CimInstance -ClassName Win32_VideoController | Where-Object { $_.Name -like '*NVIDIA*' } | Select-Object -First 1
+                    if (-not $gpu) { Log-Message "ERRO: Nenhuma placa de video NVIDIA foi encontrada neste sistema."; return }
+                    $gpuName = $gpu.Name.Replace("NVIDIA ", ""); Log-Message "   GPU Encontrada: $gpuName"
+                } catch { Log-Message "ERRO: Falha ao obter informacoes da GPU."; return }
+
+                Log-Message "[2/5] Buscando o driver mais recente no site da NVIDIA..."
+                try {
+                    $searchResponse = Invoke-RestMethod -Uri "https://www.nvidia.com/Download/Find.aspx?lang=en-us" -Method Post -Body @{ "pf"="1"; "q"=$gpuName; "d"=if ($DriverType -eq "Game Ready") { "1" } else { "2" } }
+                } catch { Log-Message "ERRO: Falha ao conectar ao site da NVIDIA."; return }
+
+                Log-Message "[3/5] Analisando resultados da busca..."
+                $latestDriver = $searchResponse.drivers | Sort-Object version -Descending | Select-Object -First 1
+                if (-not $latestDriver) { Log-Message "ERRO: Nenhum driver encontrado para '$gpuName'."; return }
+                $driverDetailsUrl = "https://www.nvidia.com" + $latestDriver.download_url
+                Log-Message "  Versao: $($latestDriver.version)"; Log-Message "  Data de Lancamento: $($latestDriver.release_date)"
+
+                Log-Message "[4/5] Extraindo o link de download final..."
+                try {
+                    $detailsPageHtml = Invoke-RestMethod -Uri $driverDetailsUrl -Method Get
+                    if ($detailsPageHtml -match 'href="(.+?\.exe)"') { $finalDownloadUrl = $matches[1]; Log-Message "  Link de download extraido com sucesso!" }
+                    else { Log-Message "ERRO: Nao foi possivel encontrar o link de download do .exe."; return }
+                } catch { Log-Message "ERRO: Falha ao acessar a pagina de detalhes do driver."; return }
+
+                $fileName = Split-Path $finalDownloadUrl -Leaf; $destinationPath = Join-Path $DownloadPath $fileName
+                Log-Message "[5/5] Baixando o driver para '$destinationPath'..."
+                try {
+                    Import-Module BitsTransfer; Start-BitsTransfer -Source $finalDownloadUrl -Destination $destinationPath -DisplayName "NVIDIA Driver Download"
+                    Log-Message "Download concluido com sucesso!"
+                } catch { Log-Message "ERRO: Falha no download."; return }
+                
+                if ($InstallSilently) {
+                    Log-Message "--- Iniciando instalacao silenciosa ---"; Log-Message "A tela pode piscar. O computador NAO sera reiniciado."
+                    try {
+                        Start-Process -FilePath $destinationPath -ArgumentList "-s -noreboot" -Verb RunAs -Wait
+                        Log-Message "Instalacao silenciosa concluida."
+                    } catch { Log-Message "ERRO: Falha ao iniciar a instalacao silenciosa. $_" }
+                }
+            }
+            # Chamada final da função com os parâmetros desejados
+            Get-NvidiaDriver -DriverType "Game Ready" -InstallSilently
+        }
+        
+        # O timer de instalação de apps também pode monitorar este job único
+        $jobCheckTimer.Start()
+    })
+
+    # ... (outros eventos de clique permanecem iguais)
     $activatorButton.Add_Click({
         $confirmation = [System.Windows.Forms.MessageBox]::Show("AVISO DE SEGURANCA:`n`nVoce esta prestes a executar um script de ativacao baixado da internet (`get.activated.win`). Executar scripts de fontes nao confiaveis pode ser perigoso.`n`nDeseja continuar?","Confirmacao de Seguranca", "YesNo", "Warning")
         if ($confirmation -eq 'No') { Log-Message "Operacao do ativador cancelada pelo usuario."; return }
@@ -157,7 +306,6 @@ try {
         catch { Log-Message "ERRO: Falha ao executar o ativador: $($_.Exception.Message)" }
         finally { $activatorButton.Enabled = $true }
     })
-
     $selectDefaultButton.Add_Click({ foreach ($btn in $appButtons) { if ($btn.Tag.IsDefault) { $btn.BackColor = $selectedButtonColor; $btn.FlatAppearance.BorderColor = $selectedButtonBorderColor } } })
     $selectAllButton.Add_Click({ foreach ($btn in $appButtons) { $btn.BackColor = $selectedButtonColor; $btn.FlatAppearance.BorderColor = $selectedButtonBorderColor } })
     $deselectAllButton.Add_Click({ foreach ($btn in $appButtons) { $btn.BackColor = $defaultButtonColor; $btn.FlatAppearance.BorderColor = [System.Drawing.Color]::LightGray } })
