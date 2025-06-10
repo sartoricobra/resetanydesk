@@ -1,3 +1,9 @@
+# Solicita elevação se não estiver em modo administrador
+if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    Start-Process -FilePath "powershell.exe" -ArgumentList "-ExecutionPolicy Bypass -File `"$PSCommandPath`"" -Verb RunAs
+    exit
+}
+
 # Finaliza todos os processos do AnyDesk
 Get-Process -Name "AnyDesk" -ErrorAction SilentlyContinue | Stop-Process -Force
 
