@@ -36,53 +36,75 @@ try {
     #>
     #endregion
 
+    # Verificar e instalar Chocolatey se necessário
+    function Ensure-ChocolateyInstalled {
+        [CmdletBinding()]
+        param()
+        Write-Output "--- VERIFICANDO INSTALACAO DO CHOCOLATEY ---"
+        if (-not (Get-Command choco.exe -ErrorAction SilentlyContinue)) {
+            Write-Output "Chocolatey nao encontrado. Iniciando instalacao silenciosa..."
+            try {
+                Set-ExecutionPolicy Bypass -Scope Process -Force
+                [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+                iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+                Start-Sleep -Seconds 5
+                if (-not (Get-Command choco.exe -ErrorAction SilentlyContinue)) {
+                    Write-Output "ERRO: A instalacao do Chocolatey parece ter falhado."
+                    return $false
+                }
+                Write-Output "Chocolatey instalado com sucesso!"
+                return $true
+            } catch {
+                Write-Output "ERRO: Falha critica durante a instalacao do Chocolatey. Detalhes: $($_.Exception.Message)"
+                return $false
+            }
+        } else {
+            Write-Output "Chocolatey ja esta instalado."
+            return $true
+        }
+    }
+
+    $chocolateyReady = Ensure-ChocolateyInstalled
+    if (-not $chocolateyReady) {
+        Write-Warning "Chocolatey nao pode ser instalado. Funcionalidades que dependem do Chocolatey poderao nao funcionar."
+    }
+
     #region Helper Functions
     
     function Invoke-NvidiaDriverInstall {
         [CmdletBinding()]
         param()
         Write-Output "--- INICIANDO PROCESSO DE ATUALIZACAO DE DRIVER NVIDIA VIA CHOCOLATEY ---"
-        Write-Output "[1/3] Verificando se o Chocolatey esta instalado..."
-        if (-not (Get-Command choco.exe -ErrorAction SilentlyContinue)) {
-            Write-Output "   Chocolatey nao encontrado. Iniciando instalacao silenciosa..."
-            try {
-                Set-ExecutionPolicy Bypass -Scope Process -Force; [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
-                Start-Sleep -Seconds 5
-                if (-not (Get-Command choco.exe -ErrorAction SilentlyContinue)) { Write-Output "ERRO: A instalacao do Chocolatey parece ter falhado."; return }
-                Write-Output "   Chocolatey instalado com sucesso!"
-            } catch { Write-Output "ERRO: Falha critica durante a instalacao do Chocolatey. Detalhes: $($_.Exception.Message)"; return }
-        } else { Write-Output "   Chocolatey ja esta instalado." }
-
-        Write-Output "[2/3] Executando o comando para instalar o driver NVIDIA..."
+        Write-Output "Executando o comando para instalar o driver NVIDIA..."
         try {
             & choco install nvidia-display-driver -y *>&1 | ForEach-Object { Write-Output "  $_" }
-            if ($LASTEXITCODE -ne 0) { Write-Warning "O processo do Chocolatey terminou com o codigo de saida: $LASTEXITCODE."}
-            else { Write-Output "Driver NVIDIA instalado/atualizado com sucesso!" }
-        } catch { Write-Output "ERRO: Falha ao executar o comando do Chocolatey. Detalhes: $($_.Exception.Message)" }
-        Write-Output "[3/3] Processo de instalacao do driver NVIDIA concluido."
+            if ($LASTEXITCODE -ne 0) {
+                Write-Warning "O processo do Chocolatey terminou com o codigo de saida: $LASTEXITCODE."
+            } else {
+                Write-Output "Driver NVIDIA instalado/atualizado com sucesso!"
+            }
+        } catch {
+            Write-Output "ERRO: Falha ao executar o comando do Chocolatey. Detalhes: $($_.Exception.Message)"
+        }
+        Write-Output "Processo de instalacao do driver NVIDIA concluido."
     }
 
     function Invoke-AmdChipsetDriverInstall {
         [CmdletBinding()]
         param()
         Write-Output "--- INICIANDO PROCESSO DE INSTALACAO DO CHIPSET AMD VIA CHOCOLATEY ---"
-        Write-Output "[1/3] Verificando se o Chocolatey esta instalado..."
-        if (-not (Get-Command choco.exe -ErrorAction SilentlyContinue)) {
-            Write-Output "   Chocolatey nao encontrado. Iniciando instalacao silenciosa..."
-            try {
-                Set-ExecutionPolicy Bypass -Scope Process -Force; [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
-                Start-Sleep -Seconds 5
-                if (-not (Get-Command choco.exe -ErrorAction SilentlyContinue)) { Write-Output "ERRO: A instalacao do Chocolatey parece ter falhado."; return }
-                Write-Output "   Chocolatey instalado com sucesso!"
-            } catch { Write-Output "ERRO: Falha critica durante a instalacao do Chocolatey. Detalhes: $($_.Exception.Message)"; return }
-        } else { Write-Output "   Chocolatey ja esta instalado." }
-        Write-Output "[2/3] Executando o comando para instalar o chipset AMD..."
+        Write-Output "Executando o comando para instalar o chipset AMD..."
         try {
             & choco install amd-ryzen-chipset -y *>&1 | ForEach-Object { Write-Output "  $_" }
-            if ($LASTEXITCODE -ne 0) { Write-Warning "O processo do Chocolatey terminou com o codigo de saida: $LASTEXITCODE."}
-            else { Write-Output "Driver de Chipset AMD instalado/atualizado com sucesso!" }
-        } catch { Write-Output "ERRO: Falha ao executar o comando do Chocolatey. Detalhes: $($_.Exception.Message)" }
-        Write-Output "[3/3] Processo de instalacao do chipset AMD concluido."
+            if ($LASTEXITCODE -ne 0) {
+                Write-Warning "O processo do Chocolatey terminou com o codigo de saida: $LASTEXITCODE."
+            } else {
+                Write-Output "Driver de Chipset AMD instalado/atualizado com sucesso!"
+            }
+        } catch {
+            Write-Output "ERRO: Falha ao executar o comando do Chocolatey. Detalhes: $($_.Exception.Message)"
+        }
+        Write-Output "Processo de instalacao do chipset AMD concluido."
     }
 
     function Invoke-AmdGpuDriverInstall {
@@ -242,7 +264,23 @@ try {
     $nvidiaButton.Add_Click({
         & $disableUi
         $script:installJob = Start-Job -ScriptBlock {
-            function Invoke-NvidiaDriverInstall { [CmdletBinding()] param(); Write-Output "--- INICIANDO PROCESSO DE ATUALIZACAO DE DRIVER NVIDIA VIA CHOCOLATEY ---"; Write-Output "[1/3] Verificando se o Chocolatey esta instalado..."; if (-not (Get-Command choco.exe -ErrorAction SilentlyContinue)) { Write-Output "   Chocolatey nao encontrado. Iniciando instalacao silenciosa..."; try { Set-ExecutionPolicy Bypass -Scope Process -Force; [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1')); Start-Sleep -Seconds 5; if (-not (Get-Command choco.exe -ErrorAction SilentlyContinue)) { Write-Output "ERRO: A instalacao do Chocolatey parece ter falhado."; return }; Write-Output "   Chocolatey instalado com sucesso!" } catch { Write-Output "ERRO: Falha critica durante a instalacao do Chocolatey. Detalhes: $($_.Exception.Message)"; return } } else { Write-Output "   Chocolatey ja esta instalado." }; Write-Output "[2/3] Executando o comando para instalar o driver NVIDIA..."; try { & choco install nvidia-display-driver -y *>&1 | ForEach-Object { Write-Output "  $_" }; if ($LASTEXITCODE -ne 0) { Write-Warning "O processo do Chocolatey terminou com o codigo de saida: $LASTEXITCODE."} else { Write-Output "Driver NVIDIA instalado/atualizado com sucesso!" } } catch { Write-Output "ERRO: Falha ao executar o comando do Chocolatey. Detalhes: $($_.Exception.Message)" }; Write-Output "[3/3] Processo de instalacao do driver NVIDIA concluido." }
+            function Invoke-NvidiaDriverInstall { 
+                [CmdletBinding()] 
+                param()
+                Write-Output "--- INICIANDO PROCESSO DE ATUALIZACAO DE DRIVER NVIDIA VIA CHOCOLATEY ---"
+                Write-Output "Executando o comando para instalar o driver NVIDIA..."
+                try { 
+                    & choco install nvidia-display-driver -y *>&1 | ForEach-Object { Write-Output "  $_" }
+                    if ($LASTEXITCODE -ne 0) { 
+                        Write-Warning "O processo do Chocolatey terminou com o codigo de saida: $LASTEXITCODE."
+                    } else { 
+                        Write-Output "Driver NVIDIA instalado/atualizado com sucesso!" 
+                    }
+                } catch { 
+                    Write-Output "ERRO: Falha ao executar o comando do Chocolatey. Detalhes: $($_.Exception.Message)" 
+                }
+                Write-Output "Processo de instalacao do driver NVIDIA concluido."
+            }
             Invoke-NvidiaDriverInstall
         }
         $taskTimer.Start()
@@ -260,7 +298,23 @@ try {
     $amdChipsetButton.Add_Click({
         & $disableUi
         $script:installJob = Start-Job -ScriptBlock {
-            function Invoke-AmdChipsetDriverInstall { [CmdletBinding()] param(); Write-Output "--- INICIANDO PROCESSO DE INSTALACAO DO CHIPSET AMD VIA CHOCOLATEY ---"; Write-Output "[1/3] Verificando se o Chocolatey esta instalado..."; if (-not (Get-Command choco.exe -ErrorAction SilentlyContinue)) { Write-Output "   Chocolatey nao encontrado. Iniciando instalacao silenciosa..."; try { Set-ExecutionPolicy Bypass -Scope Process -Force; [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1')); Start-Sleep -Seconds 5; if (-not (Get-Command choco.exe -ErrorAction SilentlyContinue)) { Write-Output "ERRO: A instalacao do Chocolatey parece ter falhado."; return }; Write-Output "   Chocolatey instalado com sucesso!" } catch { Write-Output "ERRO: Falha critica durante a instalacao do Chocolatey. Detalhes: $($_.Exception.Message)"; return } } else { Write-Output "   Chocolatey ja esta instalado." }; Write-Output "[2/3] Executando o comando para instalar o chipset AMD..."; try { & choco install amd-ryzen-chipset -y *>&1 | ForEach-Object { Write-Output "  $_" }; if ($LASTEXITCODE -ne 0) { Write-Warning "O processo do Chocolatey terminou com o codigo de saida: $LASTEXITCODE."} else { Write-Output "Driver de Chipset AMD instalado/atualizado com sucesso!" } } catch { Write-Output "ERRO: Falha ao executar o comando do Chocolatey. Detalhes: $($_.Exception.Message)" }; Write-Output "[3/3] Processo de instalacao do chipset AMD concluido." }
+            function Invoke-AmdChipsetDriverInstall { 
+                [CmdletBinding()] 
+                param()
+                Write-Output "--- INICIANDO PROCESSO DE INSTALACAO DO CHIPSET AMD VIA CHOCOLATEY ---"
+                Write-Output "Executando o comando para instalar o chipset AMD..."
+                try { 
+                    & choco install amd-ryzen-chipset -y *>&1 | ForEach-Object { Write-Output "  $_" }
+                    if ($LASTEXITCODE -ne 0) { 
+                        Write-Warning "O processo do Chocolatey terminou com o codigo de saida: $LASTEXITCODE."
+                    } else { 
+                        Write-Output "Driver de Chipset AMD instalado/atualizado com sucesso!" 
+                    }
+                } catch { 
+                    Write-Output "ERRO: Falha ao executar o comando do Chocolatey. Detalhes: $($_.Exception.Message)" 
+                }
+                Write-Output "Processo de instalacao do chipset AMD concluido."
+            }
             Invoke-AmdChipsetDriverInstall
         }
         $taskTimer.Start()
