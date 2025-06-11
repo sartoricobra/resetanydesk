@@ -97,7 +97,7 @@ try {
             Write-Output "   Pacote de software encontrado com sucesso!"
         } catch { Write-Output "ERRO: Falha ao executar o comando 'winget'."; return }
         Write-Output "[2/2] Iniciando o download e a instalacao via Winget..."
-        $wingetArgs = "install --id $PackageId --exact --source winget --accept-package-agreements --accept-source-agreements --disable-interactivity --no-progress"
+        $wingetArgs = "install --id $PackageId --exact --source winget --accept-package-agreements --accept-source-agreements --disable-interactivity"
         try {
             $process = Start-Process winget -ArgumentList $wingetArgs -Wait -PassThru -NoNewWindow
             if ($process.ExitCode -eq 0) { Write-Output "Software AMD GPU instalado/atualizado com sucesso!" }
@@ -211,7 +211,7 @@ try {
             $appParaInstalar = $script:installQueue.Dequeue(); Log-Message "`n------------------------------------------------------------"; Log-Message "Iniciando instalacao de: $($appParaInstalar.Nome)"
             $script:installJob = Start-Job -ScriptBlock { 
                 param($app); [System.Console]::OutputEncoding = [System.Text.Encoding]::UTF8; Write-Output "--- Instalando $($app.Nome) ($($app.ID)) ---";
-                $wingetArgs = @("install", "--id", $app.ID, "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity", "--no-progress");
+                $wingetArgs = @("install", "--id", $app.ID, "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity");
                 if (($app.ID -match "^\w{12}$") -and ($app.ID -ne "Microsoft.Office")) { $wingetArgs += "--source", "msstore"; Write-Output "INFO: ID detectado como da Microsoft Store." };
                 Write-Output "COMANDO: winget $($wingetArgs -join ' ')";
                 try { & winget @wingetArgs *>&1 | ForEach-Object { Write-Output "  $_" }; if ($LASTEXITCODE -ne 0) { Write-Warning "Falha ao instalar $($app.Nome). Codigo de saida: $LASTEXITCODE" } else { Write-Output "$($app.Nome) instalado com sucesso." } } catch { Write-Warning "ERRO: Falha critica ao instalar $($app.Nome). $($_.Exception.Message)" }
@@ -251,7 +251,7 @@ try {
     $amdGpuButton.Add_Click({
         & $disableUi
         $script:installJob = Start-Job -ScriptBlock {
-            function Invoke-AmdGpuDriverInstall { [CmdletBinding()] param(); Write-Output "--- INICIANDO PROCESSO DE ATUALIZACAO DE SOFTWARE AMD GPU VIA WINGET ---"; $PackageId = "AMD.AMDSoftwareCloudEdition"; Write-Output "[1/2] Verificando o pacote '$PackageId' no repositorio Winget..."; try { $searchResult = winget search --id $PackageId *>&1; if ($searchResult -match "No package found matching input criteria.") { Write-Output "ERRO: O pacote de software '$PackageId' nao foi encontrado."; return }; Write-Output "   Pacote de software encontrado com sucesso!" } catch { Write-Output "ERRO: Falha ao executar o comando 'winget'."; return }; Write-Output "[2/2] Iniciando o download e a instalacao via Winget..."; $wingetArgs = "install --id $PackageId --exact --source winget --accept-package-agreements --accept-source-agreements --disable-interactivity --no-progress"; try { $process = Start-Process winget -ArgumentList $wingetArgs -Wait -PassThru -NoNewWindow; if ($process.ExitCode -eq 0) { Write-Output "Software AMD GPU instalado/atualizado com sucesso!" } else { Write-Output "AVISO: Winget terminou com o codigo de saida: $($process.ExitCode)." } } catch { Write-Output "ERRO: Falha ao iniciar a instalacao do Winget. Detalhes: $($_.Exception.Message)" } }
+            function Invoke-AmdGpuDriverInstall { [CmdletBinding()] param(); Write-Output "--- INICIANDO PROCESSO DE ATUALIZACAO DE SOFTWARE AMD GPU VIA WINGET ---"; $PackageId = "AMD.AMDSoftwareCloudEdition"; Write-Output "[1/2] Verificando o pacote '$PackageId' no repositorio Winget..."; try { $searchResult = winget search --id $PackageId *>&1; if ($searchResult -match "No package found matching input criteria.") { Write-Output "ERRO: O pacote de software '$PackageId' nao foi encontrado."; return }; Write-Output "   Pacote de software encontrado com sucesso!" } catch { Write-Output "ERRO: Falha ao executar o comando 'winget'."; return }; Write-Output "[2/2] Iniciando o download e a instalacao via Winget..."; $wingetArgs = "install --id $PackageId --exact --source winget --accept-package-agreements --accept-source-agreements --disable-interactivity"; try { $process = Start-Process winget -ArgumentList $wingetArgs -Wait -PassThru -NoNewWindow; if ($process.ExitCode -eq 0) { Write-Output "Software AMD GPU instalado/atualizado com sucesso!" } else { Write-Output "AVISO: Winget terminou com o codigo de saida: $($process.ExitCode)." } } catch { Write-Output "ERRO: Falha ao iniciar a instalacao do Winget. Detalhes: $($_.Exception.Message)" } }
             Invoke-AmdGpuDriverInstall
         }
         $taskTimer.Start()
