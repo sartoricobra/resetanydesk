@@ -57,7 +57,7 @@ function Ensure-ChocolateyInstalled {
             # Instalar Winget via Chocolatey
             Write-Output "--- INSTALANDO WINGET VIA CHOCOLATEY ---"
             try {
-                & choco install microsoft-winget -y *>&1 | ForEach-Object { Write-Output "  $_" }
+                & choco install winget -y *>&1 | ForEach-Object { Write-Output "  $_" }
                 if ($LASTEXITCODE -ne 0) {
                     Write-Warning "AVISO: A instalacao do Winget via Chocolatey terminou com codigo de saida: $LASTEXITCODE"
                 } else {
