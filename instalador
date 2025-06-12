@@ -37,33 +37,65 @@ try {
     #endregion
 
     # Verificar e instalar Chocolatey se necessário
-    function Ensure-ChocolateyInstalled {
-        [CmdletBinding()]
-        param()
-        Write-Output "--- VERIFICANDO INSTALACAO DO CHOCOLATEY ---"
-        if (-not (Get-Command choco.exe -ErrorAction SilentlyContinue)) {
-            Write-Output "Chocolatey nao encontrado. Iniciando instalacao silenciosa..."
-            try {
-                Set-ExecutionPolicy Bypass -Scope Process -Force
-                [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
-                iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
-                Start-Sleep -Seconds 5
-                if (-not (Get-Command choco.exe -ErrorAction SilentlyContinue)) {
-                    Write-Output "ERRO: A instalacao do Chocolatey parece ter falhado."
-                    return $false
-                }
-                Write-Output "Chocolatey instalado com sucesso!"
-                return $true
-            } catch {
-                Write-Output "ERRO: Falha critica durante a instalacao do Chocolatey. Detalhes: $($_.Exception.Message)"
+function Ensure-ChocolateyInstalled {
+    [CmdletBinding()]
+    param()
+    Write-Output "--- VERIFICANDO INSTALACAO DO CHOCOLATEY ---"
+    if (-not (Get-Command choco.exe -ErrorAction SilentlyContinue)) {
+        Write-Output "Chocolatey nao encontrado. Iniciando instalacao silenciosa..."
+        try {
+            Set-ExecutionPolicy Bypass -Scope Process -Force
+            [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+            iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+            Start-Sleep -Seconds 5
+            if (-not (Get-Command choco.exe -ErrorAction SilentlyContinue)) {
+                Write-Output "ERRO: A instalacao do Chocolatey parece ter falhado."
                 return $false
             }
-        } else {
-            Write-Output "Chocolatey ja esta instalado."
+            Write-Output "Chocolatey instalado com sucesso!"
+            
+            # Instalar Winget via Chocolatey
+            Write-Output "--- INSTALANDO WINGET VIA CHOCOLATEY ---"
+            try {
+                & choco install microsoft-winget -y *>&1 | ForEach-Object { Write-Output "  $_" }
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Warning "AVISO: A instalacao do Winget via Chocolatey terminou com codigo de saida: $LASTEXITCODE"
+                } else {
+                    Write-Output "Winget instalado com sucesso via Chocolatey!"
+                }
+            } catch {
+                Write-Warning "ERRO: Falha ao instalar Winget via Chocolatey. Detalhes: $($_.Exception.Message)"
+            }
+            
             return $true
+        } catch {
+            Write-Output "ERRO: Falha critica durante a instalacao do Chocolatey. Detalhes: $($_.Exception.Message)"
+            return $false
         }
+    } else {
+        Write-Output "Chocolatey ja esta instalado."
+        
+        # Verificar se Winget está instalado, caso contrário instalar via Chocolatey
+        Write-Output "--- VERIFICANDO WINGET ---"
+        if (-not (Get-Command winget.exe -ErrorAction SilentlyContinue)) {
+            Write-Output "Winget nao encontrado. Instalando via Chocolatey..."
+            try {
+                & choco install microsoft-winget -y *>&1 | ForEach-Object { Write-Output "  $_" }
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Warning "AVISO: A instalacao do Winget via Chocolatey terminou com codigo de saida: $LASTEXITCODE"
+                } else {
+                    Write-Output "Winget instalado com sucesso via Chocolatey!"
+                }
+            } catch {
+                Write-Warning "ERRO: Falha ao instalar Winget via Chocolatey. Detalhes: $($_.Exception.Message)"
+            }
+        } else {
+            Write-Output "Winget ja esta instalado."
+        }
+        
+        return $true
     }
-
+}
     $chocolateyReady = Ensure-ChocolateyInstalled
     if (-not $chocolateyReady) {
         Write-Warning "Chocolatey nao pode ser instalado. Funcionalidades que dependem do Chocolatey poderao nao funcionar."
