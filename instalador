@@ -32,70 +32,71 @@ try {
     .AUTHOR
         Adaptado por Gemini
     .VERSION
-        15.1 (Layout Final)
+        15.2 (Layout Final com Spotify Fix)
     #>
     #endregion
 
     # Verificar e instalar Chocolatey se necessário
-function Ensure-ChocolateyInstalled {
-    [CmdletBinding()]
-    param()
-    Write-Output "--- VERIFICANDO INSTALACAO DO CHOCOLATEY ---"
-    if (-not (Get-Command choco.exe -ErrorAction SilentlyContinue)) {
-        Write-Output "Chocolatey nao encontrado. Iniciando instalacao silenciosa..."
-        try {
-            Set-ExecutionPolicy Bypass -Scope Process -Force
-            [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
-            iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
-            Start-Sleep -Seconds 5
-            if (-not (Get-Command choco.exe -ErrorAction SilentlyContinue)) {
-                Write-Output "ERRO: A instalacao do Chocolatey parece ter falhado."
+    function Ensure-ChocolateyInstalled {
+        [CmdletBinding()]
+        param()
+        Write-Output "--- VERIFICANDO INSTALACAO DO CHOCOLATEY ---"
+        if (-not (Get-Command choco.exe -ErrorAction SilentlyContinue)) {
+            Write-Output "Chocolatey nao encontrado. Iniciando instalacao silenciosa..."
+            try {
+                Set-ExecutionPolicy Bypass -Scope Process -Force
+                [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+                iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+                Start-Sleep -Seconds 5
+                if (-not (Get-Command choco.exe -ErrorAction SilentlyContinue)) {
+                    Write-Output "ERRO: A instalacao do Chocolatey parece ter falhado."
+                    return $false
+                }
+                Write-Output "Chocolatey instalado com sucesso!"
+                
+                # Instalar Winget via Chocolatey
+                Write-Output "--- INSTALANDO WINGET VIA CHOCOLATEY ---"
+                try {
+                    & choco install microsoft-winget -y *>&1 | ForEach-Object { Write-Output "  $_" }
+                    if ($LASTEXITCODE -ne 0) {
+                        Write-Warning "AVISO: A instalacao do Winget via Chocolatey terminou com codigo de saida: $LASTEXITCODE"
+                    } else {
+                        Write-Output "Winget instalado com sucesso via Chocolatey!"
+                    }
+                } catch {
+                    Write-Warning "ERRO: Falha ao instalar Winget via Chocolatey. Detalhes: $($_.Exception.Message)"
+                }
+                
+                return $true
+            } catch {
+                Write-Output "ERRO: Falha critica durante a instalacao do Chocolatey. Detalhes: $($_.Exception.Message)"
                 return $false
             }
-            Write-Output "Chocolatey instalado com sucesso!"
+        } else {
+            Write-Output "Chocolatey ja esta instalado."
             
-            # Instalar Winget via Chocolatey
-            Write-Output "--- INSTALANDO WINGET VIA CHOCOLATEY ---"
-            try {
-                & choco install winget -y *>&1 | ForEach-Object { Write-Output "  $_" }
-                if ($LASTEXITCODE -ne 0) {
-                    Write-Warning "AVISO: A instalacao do Winget via Chocolatey terminou com codigo de saida: $LASTEXITCODE"
-                } else {
-                    Write-Output "Winget instalado com sucesso via Chocolatey!"
+            # Verificar se Winget está instalado, caso contrário instalar via Chocolatey
+            Write-Output "--- VERIFICANDO WINGET ---"
+            if (-not (Get-Command winget.exe -ErrorAction SilentlyContinue)) {
+                Write-Output "Winget nao encontrado. Instalando via Chocolatey..."
+                try {
+                    & choco install microsoft-winget -y *>&1 | ForEach-Object { Write-Output "  $_" }
+                    if ($LASTEXITCODE -ne 0) {
+                        Write-Warning "AVISO: A instalacao do Winget via Chocolatey terminou com codigo de saida: $LASTEXITCODE"
+                    } else {
+                        Write-Output "Winget instalado com sucesso via Chocolatey!"
+                    }
+                } catch {
+                    Write-Warning "ERRO: Falha ao instalar Winget via Chocolatey. Detalhes: $($_.Exception.Message)"
                 }
-            } catch {
-                Write-Warning "ERRO: Falha ao instalar Winget via Chocolatey. Detalhes: $($_.Exception.Message)"
+            } else {
+                Write-Output "Winget ja esta instalado."
             }
             
             return $true
-        } catch {
-            Write-Output "ERRO: Falha critica durante a instalacao do Chocolatey. Detalhes: $($_.Exception.Message)"
-            return $false
         }
-    } else {
-        Write-Output "Chocolatey ja esta instalado."
-        
-        # Verificar se Winget está instalado, caso contrário instalar via Chocolatey
-        Write-Output "--- VERIFICANDO WINGET ---"
-        if (-not (Get-Command winget.exe -ErrorAction SilentlyContinue)) {
-            Write-Output "Winget nao encontrado. Instalando via Chocolatey..."
-            try {
-                & choco install microsoft-winget -y *>&1 | ForEach-Object { Write-Output "  $_" }
-                if ($LASTEXITCODE -ne 0) {
-                    Write-Warning "AVISO: A instalacao do Winget via Chocolatey terminou com codigo de saida: $LASTEXITCODE"
-                } else {
-                    Write-Output "Winget instalado com sucesso via Chocolatey!"
-                }
-            } catch {
-                Write-Warning "ERRO: Falha ao instalar Winget via Chocolatey. Detalhes: $($_.Exception.Message)"
-            }
-        } else {
-            Write-Output "Winget ja esta instalado."
-        }
-        
-        return $true
     }
-}
+    
     $chocolateyReady = Ensure-ChocolateyInstalled
     if (-not $chocolateyReady) {
         Write-Warning "Chocolatey nao pode ser instalado. Funcionalidades que dependem do Chocolatey poderao nao funcionar."
@@ -182,7 +183,63 @@ function Ensure-ChocolateyInstalled {
     $logLabel = New-Object System.Windows.Forms.Label; $logLabel.Text = "Log de Instalacao:"; $logLabel.Location = New-Object System.Drawing.Point(20, 685); $logLabel.AutoSize = $true; $mainForm.Controls.Add($logLabel)
     $logTextBox = New-Object System.Windows.Forms.TextBox; $logTextBox.Location = New-Object System.Drawing.Point(20, 705); $logTextBox.Size = New-Object System.Drawing.Size(790, 180); $logTextBox.Multiline = $true; $logTextBox.ScrollBars = 'Vertical'; $logTextBox.ReadOnly = $true; $logTextBox.Font = New-Object System.Drawing.Font('Consolas', 8); $mainForm.Controls.Add($logTextBox)
     
-    $apps = @{ "Comunicacao" = @( @{Nome="WhatsApp"; ID="9NKSQGP7F2NH"; IsDefault=$false}, @{Nome="Discord"; ID="Discord.Discord"; IsDefault=$false} ); "Navegador" = @( @{Nome="Chrome"; ID="Google.Chrome"; IsDefault=$true}, @{Nome="Brave"; ID="Brave.Brave"; IsDefault=$false}, @{Nome="Firefox"; ID="Mozilla.Firefox"; IsDefault=$false} ); "Entretenimento" = @( @{Nome="VLC"; ID="VideoLAN.VLC"; IsDefault=$true}, @{Nome="Spotify"; ID="Spotify.Spotify"; IsDefault=$false}, @{Nome="Corel Draw"; ID="9PBL2KQXQ47K"; IsDefault=$false}, @{Nome="Stremio"; ID="Stremio.Stremio"; IsDefault=$false} ); "Seguranca" = @( @{Nome="WireGuard"; ID="WireGuard.WireGuard"; IsDefault=$false}, @{Nome="Malwarebytes"; ID="Malwarebytes.Malwarebytes"; IsDefault=$false} ); "Produtividade" = @( @{Nome="OneDrive"; ID="Microsoft.OneDrive"; IsDefault=$false}, @{Nome="Notepad++"; ID="Notepad++.Notepad++"; IsDefault=$false}, @{Nome="7zip"; ID="7zip.7zip"; IsDefault=$false}, @{Nome="Microsoft Office"; ID="Microsoft.Office"; IsDefault=$true}, @{Nome="LibreOffice"; ID="TheDocumentFoundation.LibreOffice"; IsDefault=$false}, @{Nome="Asana"; ID="Asana.Asana"; IsDefault=$false}, @{Nome="Trello"; ID="9NBLGGH4XXVW"; IsDefault=$false} ); "Utilitarios" = @( @{Nome="TreeSize Free"; ID="XP9M26RSCLNT88"; IsDefault=$false}, @{Nome="PowerToys"; ID="Microsoft.PowerToys"; IsDefault=$false}, @{Nome="LGHUB"; ID="Logitech.LGHUB"; IsDefault=$false}, @{Nome="qBittorrent"; ID="qBittorrent.qBittorrent"; IsDefault=$false}, @{Nome="Chocolatey"; ID="Chocolatey.Chocolatey"; IsDefault=$false}, @{Nome="AnyDesk"; ID="anydesk.anydesk"; IsDefault=$true}, @{Nome="Teamviewer"; ID="XPDM17HK323C4X"; IsDefault=$false} ); "Desenvolvimento" = @( @{Nome="Visual Studio Code"; ID="Microsoft.VisualStudioCode"; IsDefault=$false}, @{Nome="Git"; ID="Git.Git"; IsDefault=$false}, @{Nome="Python 3"; ID="9NCVDN91XZQP"; IsDefault=$false}, @{Nome="Anaconda"; ID="Anaconda.Anaconda3"; IsDefault=$false}, @{Nome="NodeJS"; ID="OpenJS.NodeJS"; IsDefault=$false}, @{Nome="Cmake"; ID="Kitware.CMake"; IsDefault=$false}, @{Nome="MongoDB Server"; ID="MongoDB.Server"; IsDefault=$false}, @{Nome="MongoDB Tools"; ID="MongoDB.DatabaseTools"; IsDefault=$false}, @{Nome="MSYS2"; ID="MSYS2.MSYS2"; IsDefault=$false} ); "Jogos" = @( @{Nome="Steam"; ID="Valve.Steam"; IsDefault=$false}, @{Nome="Epic Games Launcher"; ID="EpicGames.EpicGamesLauncher"; IsDefault=$false} ); "Audio" = @( @{Nome="Astro Command Center"; ID="9PFZ8RFZG5X4"; IsDefault=$false} ) }
+    $apps = @{ 
+        "Comunicacao" = @( 
+            @{Nome="WhatsApp"; ID="9NKSQGP7F2NH"; IsDefault=$false}, 
+            @{Nome="Discord"; ID="Discord.Discord"; IsDefault=$false} 
+        ); 
+        "Navegador" = @( 
+            @{Nome="Chrome"; ID="Google.Chrome"; IsDefault=$true}, 
+            @{Nome="Brave"; ID="Brave.Brave"; IsDefault=$false}, 
+            @{Nome="Firefox"; ID="Mozilla.Firefox"; IsDefault=$false} 
+        ); 
+        "Entretenimento" = @( 
+            @{Nome="VLC"; ID="VideoLAN.VLC"; IsDefault=$true}, 
+            @{Nome="Spotify"; ID="Spotify.Spotify"; IsDefault=$false}, 
+            @{Nome="Corel Draw"; ID="9PBL2KQXQ47K"; IsDefault=$false}, 
+            @{Nome="Stremio"; ID="Stremio.Stremio"; IsDefault=$false} 
+        ); 
+        "Seguranca" = @( 
+            @{Nome="WireGuard"; ID="WireGuard.WireGuard"; IsDefault=$false}, 
+            @{Nome="Malwarebytes"; ID="Malwarebytes.Malwarebytes"; IsDefault=$false} 
+        ); 
+        "Produtividade" = @( 
+            @{Nome="OneDrive"; ID="Microsoft.OneDrive"; IsDefault=$false}, 
+            @{Nome="Notepad++"; ID="Notepad++.Notepad++"; IsDefault=$false}, 
+            @{Nome="7zip"; ID="7zip.7zip"; IsDefault=$false}, 
+            @{Nome="Microsoft Office"; ID="Microsoft.Office"; IsDefault=$true}, 
+            @{Nome="LibreOffice"; ID="TheDocumentFoundation.LibreOffice"; IsDefault=$false}, 
+            @{Nome="Asana"; ID="Asana.Asana"; IsDefault=$false}, 
+            @{Nome="Trello"; ID="9NBLGGH4XXVW"; IsDefault=$false} 
+        ); 
+        "Utilitarios" = @( 
+            @{Nome="TreeSize Free"; ID="XP9M26RSCLNT88"; IsDefault=$false}, 
+            @{Nome="PowerToys"; ID="Microsoft.PowerToys"; IsDefault=$false}, 
+            @{Nome="LGHUB"; ID="Logitech.GHUB"; IsDefault=$false}, 
+            @{Nome="qBittorrent"; ID="qBittorrent.qBittorrent"; IsDefault=$false}, 
+            @{Nome="Chocolatey"; ID="Chocolatey.Chocolatey"; IsDefault=$false}, 
+            @{Nome="AnyDesk"; ID="anydesk.anydesk"; IsDefault=$true}, 
+            @{Nome="Teamviewer"; ID="XPDM17HK323C4X"; IsDefault=$false} 
+        ); 
+        "Desenvolvimento" = @( 
+            @{Nome="Visual Studio Code"; ID="Microsoft.VisualStudioCode"; IsDefault=$false}, 
+            @{Nome="Git"; ID="Git.Git"; IsDefault=$false}, 
+            @{Nome="Python 3"; ID="9NCVDN91XZQP"; IsDefault=$false}, 
+            @{Nome="Anaconda"; ID="Anaconda.Anaconda3"; IsDefault=$false}, 
+            @{Nome="NodeJS"; ID="OpenJS.NodeJS"; IsDefault=$false}, 
+            @{Nome="Cmake"; ID="Kitware.CMake"; IsDefault=$false}, 
+            @{Nome="MongoDB Server"; ID="MongoDB.Server"; IsDefault=$false}, 
+            @{Nome="MongoDB Tools"; ID="MongoDB.DatabaseTools"; IsDefault=$false}, 
+            @{Nome="MSYS2"; ID="MSYS2.MSYS2"; IsDefault=$false} 
+        ); 
+        "Jogos" = @( 
+            @{Nome="Steam"; ID="Valve.Steam"; IsDefault=$false}, 
+            @{Nome="Epic Games Launcher"; ID="EpicGames.EpicGamesLauncher"; IsDefault=$false} 
+        ); 
+        "Audio" = @( 
+            @{Nome="Astro Command Center"; ID="9PFZ8RFZG5X4"; IsDefault=$false} 
+        ) 
+    }
     
     $appButtons = @()
 
@@ -195,32 +252,56 @@ function Ensure-ChocolateyInstalled {
 
     $col = 0; $row = 0
     foreach ($cat in ($apps.Keys | Sort-Object)) {
-        ### LAYOUT CORRIGIDO E SIMPLIFICADO ###
-        # O GroupBox agora tem seu Dock = Fill, para preencher a celula da grade principal.
-        $groupBox = New-Object System.Windows.Forms.GroupBox; $groupBox.Text = $cat; $groupBox.Dock = 'Fill'; $groupBox.Font = New-Object System.Drawing.Font('Segoe UI', 9, [System.Drawing.FontStyle]::Bold);
-        
-        # A grade interna dos apps força as 3 colunas.
-        $appsTable = New-Object System.Windows.Forms.TableLayoutPanel; $appsTable.Dock = 'Fill'; $appsTable.ColumnCount = 3
-        (1..3) | ForEach-Object { $appsTable.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 33.33))) }
-
         $appsNestaCategoria = $apps[$cat] | Sort-Object Nome
         $appCount = $appsNestaCategoria.Count
-        if ($appCount -gt 0) {
-            $appRowCount = [System.Math]::Ceiling($appCount / 3.0)
-            $appsTable.RowCount = $appRowCount
-            # A altura de cada linha de botoes e definida como AutoSize.
-            (1..$appRowCount) | ForEach-Object { $appsTable.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::AutoSize))) }
         
-            $appCol = 0; $appRow = 0
+        # Calcular altura dinamica baseada no numero de apps
+        $appRowCount = if ($appCount -gt 0) { [System.Math]::Ceiling($appCount / 3.0) } else { 1 }
+        $groupBoxHeight = 45 + ($appRowCount * 26)  # 45 para header + 26 por linha de botoes
+        
+        # O GroupBox com altura calculada dinamicamente
+        $groupBox = New-Object System.Windows.Forms.GroupBox
+        $groupBox.Text = $cat
+        $groupBox.Size = New-Object System.Drawing.Size(390, $groupBoxHeight)
+        $groupBox.Anchor = 'Top,Left'
+        $groupBox.Font = New-Object System.Drawing.Font('Segoe UI', 9, [System.Drawing.FontStyle]::Bold)
+        
+        # FlowLayoutPanel para organizar os botoes de forma mais simples
+        $flowPanel = New-Object System.Windows.Forms.FlowLayoutPanel
+        $flowPanel.Location = New-Object System.Drawing.Point(10, 20)
+        $flowPanel.Size = New-Object System.Drawing.Size(370, ($groupBoxHeight - 25))
+        $flowPanel.FlowDirection = 'LeftToRight'
+        $flowPanel.WrapContents = $true
+        $flowPanel.AutoScroll = $false
+
+        if ($appCount -gt 0) {
             foreach ($app in $appsNestaCategoria) {
-                $appButton = New-Object System.Windows.Forms.Button; $appButton.Text = $app.Nome; $appButton.Tag = $app; $appButton.Dock = 'Fill'; $appButton.MinimumSize = New-Object System.Drawing.Size(100, 28); $appButton.Font = New-Object System.Drawing.Font('Segoe UI', 8.5); $appButton.Margin = New-Object System.Windows.Forms.Padding(3); $appButton.BackColor = $defaultButtonColor; $appButton.FlatStyle = 'Flat'; $appButton.FlatAppearance.BorderSize = 1; $appButton.FlatAppearance.BorderColor = [System.Drawing.Color]::LightGray
-                $appButton.Add_Click({ if ($this.BackColor -eq $selectedButtonColor) { $this.BackColor = $defaultButtonColor; $this.FlatAppearance.BorderColor = [System.Drawing.Color]::LightGray } else { $this.BackColor = $selectedButtonColor; $this.FlatAppearance.BorderColor = $selectedButtonBorderColor } })
-                $appsTable.Controls.Add($appButton, $appCol, $appRow)
+                $appButton = New-Object System.Windows.Forms.Button
+                $appButton.Text = $app.Nome
+                $appButton.Tag = $app
+                $appButton.Size = New-Object System.Drawing.Size(100, 20)
+                $appButton.Font = New-Object System.Drawing.Font('Segoe UI', 8.5)
+                $appButton.Margin = New-Object System.Windows.Forms.Padding(2)
+                $appButton.BackColor = $defaultButtonColor
+                $appButton.FlatStyle = 'Flat'
+                $appButton.FlatAppearance.BorderSize = 1
+                $appButton.FlatAppearance.BorderColor = [System.Drawing.Color]::LightGray
+                $appButton.Add_Click({ 
+                    if ($this.BackColor -eq $selectedButtonColor) { 
+                        $this.BackColor = $defaultButtonColor
+                        $this.FlatAppearance.BorderColor = [System.Drawing.Color]::LightGray 
+                    } else { 
+                        $this.BackColor = $selectedButtonColor
+                        $this.FlatAppearance.BorderColor = $selectedButtonBorderColor 
+                    } 
+                })
+                
+                $flowPanel.Controls.Add($appButton)
                 $appButtons += $appButton
-                if (++$appCol -ge 3) { $appCol = 0; $appRow++ }
             }
         }
-        $groupBox.Controls.Add($appsTable)
+        
+        $groupBox.Controls.Add($flowPanel)
         $masterTable.Controls.Add($groupBox, $col, $row)
         
         if (++$col -ge 2) { $col = 0; $row++ }
@@ -264,11 +345,84 @@ function Ensure-ChocolateyInstalled {
         if ($script:installQueue.Count -gt 0) {
             $appParaInstalar = $script:installQueue.Dequeue(); Log-Message "`n------------------------------------------------------------"; Log-Message "Iniciando instalacao de: $($appParaInstalar.Nome)"
             $script:installJob = Start-Job -ScriptBlock { 
-                param($app); [System.Console]::OutputEncoding = [System.Text.Encoding]::UTF8; Write-Output "--- Instalando $($app.Nome) ($($app.ID)) ---";
-                $wingetArgs = @("install", "--id", $app.ID, "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity");
-                if (($app.ID -match "^\w{12}$") -and ($app.ID -ne "Microsoft.Office")) { $wingetArgs += "--source", "msstore"; Write-Output "INFO: ID detectado como da Microsoft Store." };
-                Write-Output "COMANDO: winget $($wingetArgs -join ' ')";
-                try { & winget @wingetArgs *>&1 | ForEach-Object { Write-Output "  $_" }; if ($LASTEXITCODE -ne 0) { Write-Warning "Falha ao instalar $($app.Nome). Codigo de saida: $LASTEXITCODE" } else { Write-Output "$($app.Nome) instalado com sucesso." } } catch { Write-Warning "ERRO: Falha critica ao instalar $($app.Nome). $($_.Exception.Message)" }
+                param($app)
+                [System.Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+                Write-Output "--- Instalando $($app.Nome) ($($app.ID)) ---"
+                
+                # Tratamento especial para o Spotify
+                if ($app.ID -eq "Spotify.Spotify") {
+                    Write-Output "INFO: Spotify requer instalacao como usuario comum. Executando sem elevacao..."
+                    try {
+                        # Obter o usuário atual (não-admin)
+                        $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+                        Write-Output "Executando como usuario: $currentUser"
+                        
+                        # Usar runas para executar como usuário comum
+                        $processInfo = New-Object System.Diagnostics.ProcessStartInfo
+                        $processInfo.FileName = "powershell.exe"
+                        $processInfo.Arguments = "-Command `"& winget install --id Spotify.Spotify --accept-package-agreements --accept-source-agreements --disable-interactivity`""
+                        $processInfo.UseShellExecute = $true
+                        $processInfo.Verb = ""  # Remove a elevação
+                        $processInfo.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+                        
+                        $process = [System.Diagnostics.Process]::Start($processInfo)
+                        $process.WaitForExit()
+                        
+                        if ($process.ExitCode -eq 0) {
+                            Write-Output "Spotify instalado com sucesso como usuario comum!"
+                        } else {
+                            Write-Warning "Falha ao instalar Spotify. Tentando metodo alternativo..."
+                            
+                            # Método alternativo usando Start-Process com -RunAs mas sem credenciais
+                            $altArgs = "install --id Spotify.Spotify --accept-package-agreements --accept-source-agreements --disable-interactivity"
+                            $altProcess = Start-Process -FilePath "winget" -ArgumentList $altArgs -Wait -PassThru -NoNewWindow
+                            
+                            if ($altProcess.ExitCode -eq 0) {
+                                Write-Output "Spotify instalado com metodo alternativo!"
+                            } else {
+                                Write-Warning "Falha na instalacao do Spotify. Codigo de saida: $($altProcess.ExitCode)"
+                            }
+                        }
+                    } catch {
+                        Write-Warning "ERRO: Falha critica ao instalar Spotify. $($_.Exception.Message)"
+                        Write-Output "Tentando instalacao direta via executavel..."
+                        
+                        # Método de fallback: download direto
+                        try {
+                            $spotifyUrl = "https://download.scdn.co/SpotifySetup.exe"
+                            $tempPath = "$env:TEMP\SpotifySetup.exe"
+                            Write-Output "Baixando Spotify de: $spotifyUrl"
+                            
+                            Invoke-WebRequest -Uri $spotifyUrl -OutFile $tempPath
+                            Write-Output "Executando instalador do Spotify..."
+                            
+                            Start-Process -FilePath $tempPath -ArgumentList "/SILENT" -Wait
+                            Remove-Item $tempPath -Force -ErrorAction SilentlyContinue
+                            Write-Output "Spotify instalado via download direto!"
+                        } catch {
+                            Write-Warning "ERRO: Falha no download direto do Spotify. $($_.Exception.Message)"
+                        }
+                    }
+                    return
+                }
+                
+                # Instalação normal para outros aplicativos
+                $wingetArgs = @("install", "--id", $app.ID, "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity")
+                if (($app.ID -match "^\w{12}$") -and ($app.ID -ne "Microsoft.Office")) { 
+                    $wingetArgs += "--source", "msstore"
+                    Write-Output "INFO: ID detectado como da Microsoft Store." 
+                }
+                Write-Output "COMANDO: winget $($wingetArgs -join ' ')"
+                try { 
+                    & winget @wingetArgs *>&1 | ForEach-Object { Write-Output "  $_" }
+                    if ($LASTEXITCODE -ne 0) { 
+                        Write-Warning "Falha ao instalar $($app.Nome). Codigo de saida: $LASTEXITCODE" 
+                    } else { 
+                        Write-Output "$($app.Nome) instalado com sucesso." 
+                    } 
+                } catch { 
+                    Write-Warning "ERRO: Falha critica ao instalar $($app.Nome). $($_.Exception.Message)" 
+                }
             } -ArgumentList $appParaInstalar
         } else {
             $taskTimer.Stop(); Log-Message "`n------------------------------------------------------------"; Log-Message "Todas as tarefas foram concluidas."
