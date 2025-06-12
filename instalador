@@ -195,7 +195,7 @@ try {
         ); 
         "Entretenimento" = @( 
             @{Nome="VLC"; ID="VideoLAN.VLC"; IsDefault=$true}, 
-            @{Nome="Spotify"; ID="Spotify.Spotify"; IsDefault=$false}, 
+            @{Nome="Spotify"; ID="9NCBCSZSJRSB"; IsDefault=$false}, 
             @{Nome="Corel Draw"; ID="9PBL2KQXQ47K"; IsDefault=$false}, 
             @{Nome="Stremio"; ID="Stremio.Stremio"; IsDefault=$false} 
         ); 
