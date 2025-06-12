@@ -219,7 +219,9 @@ try {
             @{Nome="qBittorrent"; ID="qBittorrent.qBittorrent"; IsDefault=$false}, 
             @{Nome="Chocolatey"; ID="Chocolatey.Chocolatey"; IsDefault=$false}, 
             @{Nome="AnyDesk"; ID="anydesk.anydesk"; IsDefault=$true}, 
-            @{Nome="Teamviewer"; ID="XPDM17HK323C4X"; IsDefault=$false} 
+            @{Nome="Teamviewer"; ID="XPDM17HK323C4X"; IsDefault=$false},
+            @{Nome="VirtualBox"; ID="virtualbox"; IsDefault=$false; UseChoco=$true}, 
+            @{Nome="VirtualBox Extension Pack"; ID="virtualbox-guest-additions-guest.install"; IsDefault=$false; UseChoco=$true} 
         ); 
         "Desenvolvimento" = @( 
             @{Nome="Visual Studio Code"; ID="Microsoft.VisualStudioCode"; IsDefault=$false}, 
@@ -252,36 +254,45 @@ try {
 
     $col = 0; $row = 0
     foreach ($cat in ($apps.Keys | Sort-Object)) {
-        $appsNestaCategoria = $apps[$cat] | Sort-Object Nome
+        $appsNestaCategoria = $apps[$cat]
+        # Remove a ordenação automática por nome para manter a ordem definida no array
+        if ($cat -eq "Utilitarios") {
+            # Para Utilitários, manter a ordem original do array
+            $appsNestaCategoria = $apps[$cat]
+        } else {
+            # Para outras categorias, manter ordenação alfabética
+            $appsNestaCategoria = $apps[$cat] | Sort-Object Nome
+        }
         $appCount = $appsNestaCategoria.Count
-        
+
         # Calcular altura dinamica baseada no numero de apps
         $appRowCount = if ($appCount -gt 0) { [System.Math]::Ceiling($appCount / 3.0) } else { 1 }
-        $groupBoxHeight = 45 + ($appRowCount * 26)  # 45 para header + 26 por linha de botoes
+        $groupBoxHeight = 35 + ($appRowCount * 26)  # Reduzido ainda mais: 35 + 26 por linha
         
         # O GroupBox com altura calculada dinamicamente
         $groupBox = New-Object System.Windows.Forms.GroupBox
         $groupBox.Text = $cat
-        $groupBox.Size = New-Object System.Drawing.Size(390, $groupBoxHeight)
+        $groupBox.Size = New-Object System.Drawing.Size(380, $groupBoxHeight)
         $groupBox.Anchor = 'Top,Left'
         $groupBox.Font = New-Object System.Drawing.Font('Segoe UI', 9, [System.Drawing.FontStyle]::Bold)
         
         # FlowLayoutPanel para organizar os botoes de forma mais simples
         $flowPanel = New-Object System.Windows.Forms.FlowLayoutPanel
-        $flowPanel.Location = New-Object System.Drawing.Point(10, 20)
-        $flowPanel.Size = New-Object System.Drawing.Size(370, ($groupBoxHeight - 25))
+        $flowPanel.Location = New-Object System.Drawing.Point(8, 16)  # Reduzido para 16
+        $flowPanel.Size = New-Object System.Drawing.Size(360, ($appRowCount * 26))  # Altura ainda mais precisa
         $flowPanel.FlowDirection = 'LeftToRight'
         $flowPanel.WrapContents = $true
         $flowPanel.AutoScroll = $false
+        $flowPanel.Padding = New-Object System.Windows.Forms.Padding(0)  # Removido padding completamente
 
         if ($appCount -gt 0) {
             foreach ($app in $appsNestaCategoria) {
                 $appButton = New-Object System.Windows.Forms.Button
                 $appButton.Text = $app.Nome
                 $appButton.Tag = $app
-                $appButton.Size = New-Object System.Drawing.Size(100, 20)
+                $appButton.Size = New-Object System.Drawing.Size(105, 24)
                 $appButton.Font = New-Object System.Drawing.Font('Segoe UI', 8.5)
-                $appButton.Margin = New-Object System.Windows.Forms.Padding(2)
+                $appButton.Margin = New-Object System.Windows.Forms.Padding(1, 1, 1, 1)
                 $appButton.BackColor = $defaultButtonColor
                 $appButton.FlatStyle = 'Flat'
                 $appButton.FlatAppearance.BorderSize = 1
@@ -349,64 +360,24 @@ try {
                 [System.Console]::OutputEncoding = [System.Text.Encoding]::UTF8
                 Write-Output "--- Instalando $($app.Nome) ($($app.ID)) ---"
                 
-                # Tratamento especial para o Spotify
-                if ($app.ID -eq "Spotify.Spotify") {
-                    Write-Output "INFO: Spotify requer instalacao como usuario comum. Executando sem elevacao..."
+                # Verificar se deve usar Chocolatey
+                if ($app.UseChoco -eq $true) {
+                    Write-Output "INFO: Aplicativo configurado para instalacao via Chocolatey."
                     try {
-                        # Obter o usuário atual (não-admin)
-                        $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
-                        Write-Output "Executando como usuario: $currentUser"
-                        
-                        # Usar runas para executar como usuário comum
-                        $processInfo = New-Object System.Diagnostics.ProcessStartInfo
-                        $processInfo.FileName = "powershell.exe"
-                        $processInfo.Arguments = "-Command `"& winget install --id Spotify.Spotify --accept-package-agreements --accept-source-agreements --disable-interactivity`""
-                        $processInfo.UseShellExecute = $true
-                        $processInfo.Verb = ""  # Remove a elevação
-                        $processInfo.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
-                        
-                        $process = [System.Diagnostics.Process]::Start($processInfo)
-                        $process.WaitForExit()
-                        
-                        if ($process.ExitCode -eq 0) {
-                            Write-Output "Spotify instalado com sucesso como usuario comum!"
+                        Write-Output "COMANDO: choco install $($app.ID) -y"
+                        & choco install $app.ID -y *>&1 | ForEach-Object { Write-Output "  $_" }
+                        if ($LASTEXITCODE -ne 0) {
+                            Write-Warning "Falha ao instalar $($app.Nome) via Chocolatey. Codigo de saida: $LASTEXITCODE"
                         } else {
-                            Write-Warning "Falha ao instalar Spotify. Tentando metodo alternativo..."
-                            
-                            # Método alternativo usando Start-Process com -RunAs mas sem credenciais
-                            $altArgs = "install --id Spotify.Spotify --accept-package-agreements --accept-source-agreements --disable-interactivity"
-                            $altProcess = Start-Process -FilePath "winget" -ArgumentList $altArgs -Wait -PassThru -NoNewWindow
-                            
-                            if ($altProcess.ExitCode -eq 0) {
-                                Write-Output "Spotify instalado com metodo alternativo!"
-                            } else {
-                                Write-Warning "Falha na instalacao do Spotify. Codigo de saida: $($altProcess.ExitCode)"
-                            }
+                            Write-Output "$($app.Nome) instalado com sucesso via Chocolatey!"
                         }
                     } catch {
-                        Write-Warning "ERRO: Falha critica ao instalar Spotify. $($_.Exception.Message)"
-                        Write-Output "Tentando instalacao direta via executavel..."
-                        
-                        # Método de fallback: download direto
-                        try {
-                            $spotifyUrl = "https://download.scdn.co/SpotifySetup.exe"
-                            $tempPath = "$env:TEMP\SpotifySetup.exe"
-                            Write-Output "Baixando Spotify de: $spotifyUrl"
-                            
-                            Invoke-WebRequest -Uri $spotifyUrl -OutFile $tempPath
-                            Write-Output "Executando instalador do Spotify..."
-                            
-                            Start-Process -FilePath $tempPath -ArgumentList "/SILENT" -Wait
-                            Remove-Item $tempPath -Force -ErrorAction SilentlyContinue
-                            Write-Output "Spotify instalado via download direto!"
-                        } catch {
-                            Write-Warning "ERRO: Falha no download direto do Spotify. $($_.Exception.Message)"
-                        }
+                        Write-Warning "ERRO: Falha critica ao instalar $($app.Nome) via Chocolatey. $($_.Exception.Message)"
                     }
                     return
                 }
-                
-                # Instalação normal para outros aplicativos
+
+                # Instalação normal para todos os outros aplicativos
                 $wingetArgs = @("install", "--id", $app.ID, "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity")
                 if (($app.ID -match "^\w{12}$") -and ($app.ID -ne "Microsoft.Office")) { 
                     $wingetArgs += "--source", "msstore"
