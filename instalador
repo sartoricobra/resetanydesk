@@ -207,7 +207,7 @@ try {
             @{Nome="OneDrive"; ID="Microsoft.OneDrive"; IsDefault=$false}, 
             @{Nome="Notepad++"; ID="Notepad++.Notepad++"; IsDefault=$false}, 
             @{Nome="7zip"; ID="7zip.7zip"; IsDefault=$false}, 
-            @{Nome="Microsoft Office"; ID="Microsoft.Office"; IsDefault=$true}, 
+            @{Nome="Microsoft Office"; ID="office365proplus"; IsDefault=$true; UseChoco=$true}, 
             @{Nome="LibreOffice"; ID="TheDocumentFoundation.LibreOffice"; IsDefault=$false}, 
             @{Nome="Asana"; ID="Asana.Asana"; IsDefault=$false}, 
             @{Nome="Trello"; ID="9NBLGGH4XXVW"; IsDefault=$false} 
@@ -217,7 +217,7 @@ try {
             @{Nome="PowerToys"; ID="Microsoft.PowerToys"; IsDefault=$false}, 
             @{Nome="LGHUB"; ID="Logitech.GHUB"; IsDefault=$false}, 
             @{Nome="qBittorrent"; ID="qBittorrent.qBittorrent"; IsDefault=$false}, 
-            @{Nome="Chocolatey"; ID="Chocolatey.Chocolatey"; IsDefault=$false}, 
+            @{Nome="RustDesk"; ID="rustdesk.install"; IsDefault=$false; UseChoco=$true}, 
             @{Nome="AnyDesk"; ID="anydesk.anydesk"; IsDefault=$true}, 
             @{Nome="Teamviewer"; ID="XPDM17HK323C4X"; IsDefault=$false},
             @{Nome="VirtualBox"; ID="virtualbox"; IsDefault=$false; UseChoco=$true}, 
