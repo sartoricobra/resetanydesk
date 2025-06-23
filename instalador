@@ -205,6 +205,7 @@ try {
         ); 
         "Produtividade" = @( 
             @{Nome="OneDrive"; ID="Microsoft.OneDrive"; IsDefault=$false}, 
+            @{Nome="Google Drive"; ID="googledrive"; IsDefault=$false; UseChoco=$true}, 
             @{Nome="Notepad++"; ID="Notepad++.Notepad++"; IsDefault=$false}, 
             @{Nome="7zip"; ID="7zip.7zip"; IsDefault=$false}, 
             @{Nome="Microsoft Office"; ID="office365proplus"; IsDefault=$true; UseChoco=$true}, 
