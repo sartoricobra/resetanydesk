@@ -1,1 +1,507 @@
 
+#region ADMINISTRATOR - Verificacao e Elevacao de Permissao Inteligente
+# 1. Verifica se o script esta rodando como Administrador
+$currentUser = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+$isAdmin = $currentUser.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)
+
+if (-not $isAdmin) {
+    # 2. Se NAO for admin, inicia o processo de auto-elevacao.
+    $scriptPath = $MyInvocation.MyCommand.Path
+    $arguments = "-NoProfile -ExecutionPolicy Bypass"
+    if (-not [string]::IsNullOrEmpty($scriptPath)) { $arguments += " -File `"$scriptPath`"" }
+    else {
+        $tempScriptPath = Join-Path $env:TEMP ([System.Guid]::NewGuid().ToString() + ".ps1")
+        $MyInvocation.MyCommand.Definition | Out-File -FilePath $tempScriptPath -Encoding utf8
+        $arguments += " -File `"$tempScriptPath`""
+    }
+    Write-Warning "Permissao de administrador necessaria. Reiniciando o script com elevacao..."
+    Start-Process powershell.exe -ArgumentList $arguments -Verb RunAs
+    exit
+}
+#endregion
+
+# Força o uso do protocolo de segurança TLS 1.2 para todas as conexões web
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+try {
+    #region INFO
+    <#
+    .SYNOPSIS
+        Instalador de aplicativos e utilitarios de sistema com interface grafica (GUI).
+    .DESCRIPTION
+        Versao final com layout de multiplas colunas e altura de categoria totalmente dinamica.
+    .AUTHOR
+        Adaptado por Gemini
+    .VERSION
+        15.2 (Layout Final com Spotify Fix)
+    #>
+    #endregion
+
+    # Verificar e instalar Chocolatey se necessário
+    function Ensure-ChocolateyInstalled {
+        [CmdletBinding()]
+        param()
+        Write-Output "--- VERIFICANDO INSTALACAO DO CHOCOLATEY ---"
+        if (-not (Get-Command choco.exe -ErrorAction SilentlyContinue)) {
+            Write-Output "Chocolatey nao encontrado. Iniciando instalacao silenciosa..."
+            try {
+                Set-ExecutionPolicy Bypass -Scope Process -Force
+                [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+                iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+                Start-Sleep -Seconds 5
+                if (-not (Get-Command choco.exe -ErrorAction SilentlyContinue)) {
+                    Write-Output "ERRO: A instalacao do Chocolatey parece ter falhado."
+                    return $false
+                }
+                Write-Output "Chocolatey instalado com sucesso!"
+                
+                # Instalar Winget via Chocolatey
+                Write-Output "--- INSTALANDO WINGET VIA CHOCOLATEY ---"
+                try {
+                    & choco install microsoft-winget -y *>&1 | ForEach-Object { Write-Output "  $_" }
+                    if ($LASTEXITCODE -ne 0) {
+                        Write-Warning "AVISO: A instalacao do Winget via Chocolatey terminou com codigo de saida: $LASTEXITCODE"
+                    } else {
+                        Write-Output "Winget instalado com sucesso via Chocolatey!"
+                    }
+                } catch {
+                    Write-Warning "ERRO: Falha ao instalar Winget via Chocolatey. Detalhes: $($_.Exception.Message)"
+                }
+                
+                return $true
+            } catch {
+                Write-Output "ERRO: Falha critica durante a instalacao do Chocolatey. Detalhes: $($_.Exception.Message)"
+                return $false
+            }
+        } else {
+            Write-Output "Chocolatey ja esta instalado."
+            
+            # Verificar se Winget está instalado, caso contrário instalar via Chocolatey
+            Write-Output "--- VERIFICANDO WINGET ---"
+            if (-not (Get-Command winget.exe -ErrorAction SilentlyContinue)) {
+                Write-Output "Winget nao encontrado. Instalando via Chocolatey..."
+                try {
+                    & choco install microsoft-winget -y *>&1 | ForEach-Object { Write-Output "  $_" }
+                    if ($LASTEXITCODE -ne 0) {
+                        Write-Warning "AVISO: A instalacao do Winget via Chocolatey terminou com codigo de saida: $LASTEXITCODE"
+                    } else {
+                        Write-Output "Winget instalado com sucesso via Chocolatey!"
+                    }
+                } catch {
+                    Write-Warning "ERRO: Falha ao instalar Winget via Chocolatey. Detalhes: $($_.Exception.Message)"
+                }
+            } else {
+                Write-Output "Winget ja esta instalado."
+            }
+            
+            return $true
+        }
+    }
+    
+    $chocolateyReady = Ensure-ChocolateyInstalled
+    if (-not $chocolateyReady) {
+        Write-Warning "Chocolatey nao pode ser instalado. Funcionalidades que dependem do Chocolatey poderao nao funcionar."
+    }
+
+    #region Helper Functions
+    
+    function Invoke-NvidiaDriverInstall {
+        [CmdletBinding()]
+        param()
+        Write-Output "--- INICIANDO PROCESSO DE ATUALIZACAO DE DRIVER NVIDIA VIA CHOCOLATEY ---"
+        Write-Output "Executando o comando para instalar o driver NVIDIA..."
+        try {
+            & choco install nvidia-display-driver -y *>&1 | ForEach-Object { Write-Output "  $_" }
+            if ($LASTEXITCODE -ne 0) {
+                Write-Warning "O processo do Chocolatey terminou com o codigo de saida: $LASTEXITCODE."
+            } else {
+                Write-Output "Driver NVIDIA instalado/atualizado com sucesso!"
+            }
+        } catch {
+            Write-Output "ERRO: Falha ao executar o comando do Chocolatey. Detalhes: $($_.Exception.Message)"
+        }
+        Write-Output "Processo de instalacao do driver NVIDIA concluido."
+    }
+
+    function Invoke-AmdChipsetDriverInstall {
+        [CmdletBinding()]
+        param()
+        Write-Output "--- INICIANDO PROCESSO DE INSTALACAO DO CHIPSET AMD VIA CHOCOLATEY ---"
+        Write-Output "Executando o comando para instalar o chipset AMD..."
+        try {
+            & choco install amd-ryzen-chipset -y *>&1 | ForEach-Object { Write-Output "  $_" }
+            if ($LASTEXITCODE -ne 0) {
+                Write-Warning "O processo do Chocolatey terminou com o codigo de saida: $LASTEXITCODE."
+            } else {
+                Write-Output "Driver de Chipset AMD instalado/atualizado com sucesso!"
+            }
+        } catch {
+            Write-Output "ERRO: Falha ao executar o comando do Chocolatey. Detalhes: $($_.Exception.Message)"
+        }
+        Write-Output "Processo de instalacao do chipset AMD concluido."
+    }
+
+    function Invoke-AmdGpuDriverInstall {
+        [CmdletBinding()]
+        param()
+        Write-Output "--- INICIANDO PROCESSO DE ATUALIZACAO DE SOFTWARE AMD GPU VIA WINGET ---"
+        $PackageId = "AMD.AMDSoftwareCloudEdition"
+        Write-Output "[1/2] Verificando o pacote '$PackageId' no repositorio Winget..."
+        try {
+            $searchResult = winget search --id $PackageId *>&1
+            if ($searchResult -match "No package found matching input criteria.") { Write-Output "ERRO: O pacote de software '$PackageId' nao foi encontrado."; return }
+            Write-Output "   Pacote de software encontrado com sucesso!"
+        } catch { Write-Output "ERRO: Falha ao executar o comando 'winget'."; return }
+        Write-Output "[2/2] Iniciando o download e a instalacao via Winget..."
+        $wingetArgs = "install --id $PackageId --exact --source winget --accept-package-agreements --accept-source-agreements --disable-interactivity"
+        try {
+            $process = Start-Process winget -ArgumentList $wingetArgs -Wait -PassThru -NoNewWindow
+            if ($process.ExitCode -eq 0) { Write-Output "Software AMD GPU instalado/atualizado com sucesso!" }
+            else { Write-Output "AVISO: O processo do Winget terminou com o codigo de saida: $($process.ExitCode)." }
+        } catch { Write-Output "ERRO: Falha ao iniciar a instalacao do Winget. Detalhes: $($_.Exception.Message)" }
+    }
+
+    function Log-Message {
+        param($Message)
+        if ($logTextBox.InvokeRequired) { $logTextBox.Invoke([Action[string]]$logTextBox.AppendText, "$Message`r`n") } 
+        else { $logTextBox.AppendText("$Message`r`n") }
+    }
+    #endregion
+
+    $PSDefaultParameterValues['*:Encoding'] = 'utf8'
+    $script:installJob = $null
+    $script:installQueue = [System.Collections.Generic.Queue[object]]::new()
+
+    #region GUI
+    Add-Type -AssemblyName System.Windows.Forms; Add-Type -AssemblyName System.Drawing
+    $defaultButtonColor = [System.Drawing.Color]::WhiteSmoke; $selectedButtonColor = [System.Drawing.Color]::FromArgb(204, 255, 204); $selectedButtonBorderColor = [System.Drawing.Color]::DarkGreen
+    
+    $mainForm = New-Object System.Windows.Forms.Form; $mainForm.Text = 'Pos Instalador de Aplicativos (Executando como Administrador)'; $mainForm.Size = New-Object System.Drawing.Size(850, 950); $mainForm.StartPosition = 'CenterScreen'; $mainForm.FormBorderStyle = 'FixedSingle'; $mainForm.MaximizeBox = $false
+    $mainPanel = New-Object System.Windows.Forms.Panel; $mainPanel.Location = New-Object System.Drawing.Point(20, 20); $mainPanel.Size = New-Object System.Drawing.Size(790, 450); $mainPanel.AutoScroll = $true; $mainPanel.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle; $mainPanel.Padding = New-Object System.Windows.Forms.Padding(0, 0, [System.Windows.Forms.SystemInformation]::VerticalScrollBarWidth, 0); $mainForm.Controls.Add($mainPanel)
+    $actionPanel = New-Object System.Windows.Forms.Panel; $actionPanel.Location = New-Object System.Drawing.Point(20, 480); $actionPanel.Size = New-Object System.Drawing.Size(790, 45); $mainForm.Controls.Add($actionPanel)
+    $driversGroupBox = New-Object System.Windows.Forms.GroupBox; $driversGroupBox.Text = "Drivers"; $driversGroupBox.Location = New-Object System.Drawing.Point(20, 535); $driversGroupBox.Size = New-Object System.Drawing.Size(790, 65); $mainForm.Controls.Add($driversGroupBox)
+    $otherTasksGroupBox = New-Object System.Windows.Forms.GroupBox; $otherTasksGroupBox.Text = "Outras Tarefas"; $otherTasksGroupBox.Location = New-Object System.Drawing.Point(20, 610); $otherTasksGroupBox.Size = New-Object System.Drawing.Size(790, 65); $mainForm.Controls.Add($otherTasksGroupBox)
+    $logLabel = New-Object System.Windows.Forms.Label; $logLabel.Text = "Log de Instalacao:"; $logLabel.Location = New-Object System.Drawing.Point(20, 685); $logLabel.AutoSize = $true; $mainForm.Controls.Add($logLabel)
+    $logTextBox = New-Object System.Windows.Forms.TextBox; $logTextBox.Location = New-Object System.Drawing.Point(20, 705); $logTextBox.Size = New-Object System.Drawing.Size(790, 180); $logTextBox.Multiline = $true; $logTextBox.ScrollBars = 'Vertical'; $logTextBox.ReadOnly = $true; $logTextBox.Font = New-Object System.Drawing.Font('Consolas', 8); $mainForm.Controls.Add($logTextBox)
+    
+    $apps = @{ 
+        "Comunicacao" = @( 
+            @{Nome="WhatsApp"; ID="9NKSQGP7F2NH"; IsDefault=$false}, 
+            @{Nome="Discord"; ID="Discord.Discord"; IsDefault=$false} 
+        ); 
+        "Navegador" = @( 
+            @{Nome="Chrome"; ID="Google.Chrome"; IsDefault=$true}, 
+            @{Nome="Brave"; ID="Brave.Brave"; IsDefault=$false}, 
+            @{Nome="Firefox"; ID="Mozilla.Firefox"; IsDefault=$false} 
+        ); 
+        "Entretenimento" = @( 
+            @{Nome="VLC"; ID="VideoLAN.VLC"; IsDefault=$true}, 
+            @{Nome="Spotify"; ID="9NCBCSZSJRSB"; IsDefault=$false}, 
+            @{Nome="Corel Draw"; ID="9PBL2KQXQ47K"; IsDefault=$false}, 
+            @{Nome="Stremio"; ID="Stremio.Stremio"; IsDefault=$false} 
+        ); 
+        "Seguranca" = @( 
+            @{Nome="WireGuard"; ID="WireGuard.WireGuard"; IsDefault=$false}, 
+            @{Nome="Malwarebytes"; ID="Malwarebytes.Malwarebytes"; IsDefault=$false} 
+        ); 
+        "Produtividade" = @( 
+            @{Nome="OneDrive"; ID="Microsoft.OneDrive"; IsDefault=$false}, 
+            @{Nome="Google Drive"; ID="googledrive"; IsDefault=$false; UseChoco=$true}, 
+            @{Nome="Notepad++"; ID="Notepad++.Notepad++"; IsDefault=$false}, 
+            @{Nome="7zip"; ID="7zip.7zip"; IsDefault=$false}, 
+            @{Nome="Microsoft Office"; ID="office365proplus"; IsDefault=$true; UseChoco=$true}, 
+            @{Nome="LibreOffice"; ID="TheDocumentFoundation.LibreOffice"; IsDefault=$false}, 
+            @{Nome="Asana"; ID="Asana.Asana"; IsDefault=$false}, 
+            @{Nome="Trello"; ID="9NBLGGH4XXVW"; IsDefault=$false} 
+        ); 
+        "Utilitarios" = @( 
+            @{Nome="TreeSize Free"; ID="XP9M26RSCLNT88"; IsDefault=$false}, 
+            @{Nome="PowerToys"; ID="Microsoft.PowerToys"; IsDefault=$false}, 
+            @{Nome="LGHUB"; ID="Logitech.GHUB"; IsDefault=$false}, 
+            @{Nome="qBittorrent"; ID="qBittorrent.qBittorrent"; IsDefault=$false}, 
+            @{Nome="RustDesk"; ID="rustdesk.install"; IsDefault=$false; UseChoco=$true}, 
+            @{Nome="AnyDesk"; ID="anydesk.anydesk"; IsDefault=$true}, 
+            @{Nome="Teamviewer"; ID="XPDM17HK323C4X"; IsDefault=$false},
+            @{Nome="VirtualBox"; ID="virtualbox"; IsDefault=$false; UseChoco=$true}, 
+            @{Nome="VirtualBox Extension Pack"; ID="virtualbox-guest-additions-guest.install"; IsDefault=$false; UseChoco=$true} 
+        ); 
+        "Desenvolvimento" = @( 
+            @{Nome="Visual Studio Code"; ID="Microsoft.VisualStudioCode"; IsDefault=$false}, 
+            @{Nome="Git"; ID="Git.Git"; IsDefault=$false}, 
+            @{Nome="Python 3"; ID="9NCVDN91XZQP"; IsDefault=$false}, 
+            @{Nome="Anaconda"; ID="Anaconda.Anaconda3"; IsDefault=$false}, 
+            @{Nome="NodeJS"; ID="OpenJS.NodeJS"; IsDefault=$false}, 
+            @{Nome="Cmake"; ID="Kitware.CMake"; IsDefault=$false}, 
+            @{Nome="MongoDB Server"; ID="MongoDB.Server"; IsDefault=$false}, 
+            @{Nome="MongoDB Tools"; ID="MongoDB.DatabaseTools"; IsDefault=$false}, 
+            @{Nome="MSYS2"; ID="MSYS2.MSYS2"; IsDefault=$false} 
+        ); 
+        "Jogos" = @( 
+            @{Nome="Steam"; ID="Valve.Steam"; IsDefault=$false}, 
+            @{Nome="Epic Games Launcher"; ID="EpicGames.EpicGamesLauncher"; IsDefault=$false} 
+        ); 
+        "Audio" = @( 
+            @{Nome="Astro Command Center"; ID="9PFZ8RFZG5X4"; IsDefault=$false} 
+        ) 
+    }
+    
+    $appButtons = @()
+
+    $masterTable = New-Object System.Windows.Forms.TableLayoutPanel; $masterTable.Dock = 'Fill'; $masterTable.ColumnCount = 2; $masterTable.AutoScroll = $true
+    $masterTable.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 50)))
+    $masterTable.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 50)))
+    $masterRowCount = [System.Math]::Ceiling(($apps.Keys.Count) / 2.0); if ($masterRowCount -gt 0) { $masterTable.RowCount = $masterRowCount }
+    (1..$masterRowCount) | ForEach-Object { $masterTable.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::AutoSize))) }
+    $mainPanel.Controls.Add($masterTable)
+
+    $col = 0; $row = 0
+    foreach ($cat in ($apps.Keys | Sort-Object)) {
+        $appsNestaCategoria = $apps[$cat]
+        # Remove a ordenação automática por nome para manter a ordem definida no array
+        if ($cat -eq "Utilitarios") {
+            # Para Utilitários, manter a ordem original do array
+            $appsNestaCategoria = $apps[$cat]
+        } else {
+            # Para outras categorias, manter ordenação alfabética
+            $appsNestaCategoria = $apps[$cat] | Sort-Object Nome
+        }
+        $appCount = $appsNestaCategoria.Count
+
+        # Calcular altura dinamica baseada no numero de apps
+        $appRowCount = if ($appCount -gt 0) { [System.Math]::Ceiling($appCount / 3.0) } else { 1 }
+        $groupBoxHeight = 35 + ($appRowCount * 26)  # Reduzido ainda mais: 35 + 26 por linha
+        
+        # O GroupBox com altura calculada dinamicamente
+        $groupBox = New-Object System.Windows.Forms.GroupBox
+        $groupBox.Text = $cat
+        $groupBox.Size = New-Object System.Drawing.Size(380, $groupBoxHeight)
+        $groupBox.Anchor = 'Top,Left'
+        $groupBox.Font = New-Object System.Drawing.Font('Segoe UI', 9, [System.Drawing.FontStyle]::Bold)
+        
+        # FlowLayoutPanel para organizar os botoes de forma mais simples
+        $flowPanel = New-Object System.Windows.Forms.FlowLayoutPanel
+        $flowPanel.Location = New-Object System.Drawing.Point(8, 16)  # Reduzido para 16
+        $flowPanel.Size = New-Object System.Drawing.Size(360, ($appRowCount * 26))  # Altura ainda mais precisa
+        $flowPanel.FlowDirection = 'LeftToRight'
+        $flowPanel.WrapContents = $true
+        $flowPanel.AutoScroll = $false
+        $flowPanel.Padding = New-Object System.Windows.Forms.Padding(0)  # Removido padding completamente
+
+        if ($appCount -gt 0) {
+            foreach ($app in $appsNestaCategoria) {
+                $appButton = New-Object System.Windows.Forms.Button
+                $appButton.Text = $app.Nome
+                $appButton.Tag = $app
+                $appButton.Size = New-Object System.Drawing.Size(105, 24)
+                $appButton.Font = New-Object System.Drawing.Font('Segoe UI', 8.5)
+                $appButton.Margin = New-Object System.Windows.Forms.Padding(1, 1, 1, 1)
+                $appButton.BackColor = $defaultButtonColor
+                $appButton.FlatStyle = 'Flat'
+                $appButton.FlatAppearance.BorderSize = 1
+                $appButton.FlatAppearance.BorderColor = [System.Drawing.Color]::LightGray
+                $appButton.Add_Click({ 
+                    if ($this.BackColor -eq $selectedButtonColor) { 
+                        $this.BackColor = $defaultButtonColor
+                        $this.FlatAppearance.BorderColor = [System.Drawing.Color]::LightGray 
+                    } else { 
+                        $this.BackColor = $selectedButtonColor
+                        $this.FlatAppearance.BorderColor = $selectedButtonBorderColor 
+                    } 
+                })
+                
+                $flowPanel.Controls.Add($appButton)
+                $appButtons += $appButton
+            }
+        }
+        
+        $groupBox.Controls.Add($flowPanel)
+        $masterTable.Controls.Add($groupBox, $col, $row)
+        
+        if (++$col -ge 2) { $col = 0; $row++ }
+    }
+
+    # Layout dinâmico dos botões de ação
+    $actionTable = New-Object System.Windows.Forms.TableLayoutPanel; $actionTable.Dock = 'Fill'; $actionTable.ColumnCount = 4; $actionTable.RowCount = 1
+    (1..4) | ForEach-Object { $actionTable.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 25))) }
+    $installButton = New-Object System.Windows.Forms.Button; $installButton.Text = 'Iniciar Instalacao'; $installButton.Dock = 'Fill'; $installButton.Margin = New-Object System.Windows.Forms.Padding(3); $installButton.BackColor = [System.Drawing.Color]::FromArgb(67, 160, 71); $installButton.ForeColor = [System.Drawing.Color]::White
+    $selectDefaultButton = New-Object System.Windows.Forms.Button; $selectDefaultButton.Text = 'Selecionar Padrao'; $selectDefaultButton.Dock = 'Fill'; $selectDefaultButton.Margin = New-Object System.Windows.Forms.Padding(3); $selectDefaultButton.BackColor = [System.Drawing.Color]::FromArgb(67, 160, 71); $selectDefaultButton.ForeColor = [System.Drawing.Color]::White
+    $selectAllButton = New-Object System.Windows.Forms.Button; $selectAllButton.Text = 'Selecionar Todos'; $selectAllButton.Dock = 'Fill'; $selectAllButton.Margin = New-Object System.Windows.Forms.Padding(3)
+    $deselectAllButton = New-Object System.Windows.Forms.Button; $deselectAllButton.Text = 'Limpar Selecao'; $deselectAllButton.Dock = 'Fill'; $deselectAllButton.Margin = New-Object System.Windows.Forms.Padding(3)
+    $actionTable.Controls.Add($selectDefaultButton, 0, 0); $actionTable.Controls.Add($selectAllButton, 1, 0); $actionTable.Controls.Add($deselectAllButton, 2, 0); $actionTable.Controls.Add($installButton, 3, 0)
+    $actionPanel.Controls.Add($actionTable)
+    
+    $driverTable = New-Object System.Windows.Forms.TableLayoutPanel; $driverTable.Dock = 'Fill'; $driverTable.ColumnCount = 3; $driverTable.RowCount = 1
+    (1..3) | ForEach-Object { $driverTable.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 33.33))) }
+    $nvidiaButton = New-Object System.Windows.Forms.Button; $nvidiaButton.Text = 'Instalar Driver NVIDIA'; $nvidiaButton.Dock = 'Fill'; $nvidiaButton.Margin = New-Object System.Windows.Forms.Padding(3); $nvidiaButton.BackColor = [System.Drawing.Color]::FromArgb(118, 185, 0); $nvidiaButton.ForeColor = [System.Drawing.Color]::White
+    $amdGpuButton = New-Object System.Windows.Forms.Button; $amdGpuButton.Text = 'Instalar Software AMD'; $amdGpuButton.Dock = 'Fill'; $amdGpuButton.Margin = New-Object System.Windows.Forms.Padding(3); $amdGpuButton.BackColor = [System.Drawing.Color]::FromArgb(237, 28, 36); $amdGpuButton.ForeColor = [System.Drawing.Color]::White
+    $amdChipsetButton = New-Object System.Windows.Forms.Button; $amdChipsetButton.Text = 'Instalar Chipset AMD'; $amdChipsetButton.Dock = 'Fill'; $amdChipsetButton.Margin = New-Object System.Windows.Forms.Padding(3); $amdChipsetButton.BackColor = [System.Drawing.Color]::FromArgb(237, 28, 36); $amdChipsetButton.ForeColor = [System.Drawing.Color]::White
+    $driverTable.Controls.Add($nvidiaButton, 0, 0); $driverTable.Controls.Add($amdGpuButton, 1, 0); $driverTable.Controls.Add($amdChipsetButton, 2, 0)
+    $driversGroupBox.Controls.Add($driverTable)
+
+    $otherTasksTable = New-Object System.Windows.Forms.TableLayoutPanel; $otherTasksTable.Dock = 'Fill'; $otherTasksTable.ColumnCount = 1; $otherTasksTable.RowCount = 1
+    $otherTasksTable.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 100)))
+    $activatorButton = New-Object System.Windows.Forms.Button; $activatorButton.Text = 'Rodar Ativador'; $activatorButton.Dock = 'Fill'; $activatorButton.Margin = New-Object System.Windows.Forms.Padding(3); $activatorButton.BackColor = [System.Drawing.Color]::DarkOrange
+    $otherTasksTable.Controls.Add($activatorButton, 0, 0)
+    $otherTasksGroupBox.Controls.Add($otherTasksTable)
+    
+    #endregion
+
+    #region EVENT HANDLERS
+    
+    $taskTimer = New-Object System.Windows.Forms.Timer; $taskTimer.Interval = 1000
+    $taskTimer.Add_Tick({
+        if ($null -ne $script:installJob) {
+            Receive-Job -Job $script:installJob | ForEach-Object { Log-Message $_ }
+            if ($script:installJob.State -in @('Completed', 'Failed', 'Stopped')) { Remove-Job -Job $script:installJob; $script:installJob = $null }
+            return
+        }
+        if ($script:installQueue.Count -gt 0) {
+            $appParaInstalar = $script:installQueue.Dequeue(); Log-Message "`n------------------------------------------------------------"; Log-Message "Iniciando instalacao de: $($appParaInstalar.Nome)"
+            $script:installJob = Start-Job -ScriptBlock { 
+                param($app)
+                [System.Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+                Write-Output "--- Instalando $($app.Nome) ($($app.ID)) ---"
+                
+                # Verificar se deve usar Chocolatey
+                if ($app.UseChoco -eq $true) {
+                    Write-Output "INFO: Aplicativo configurado para instalacao via Chocolatey."
+                    try {
+                        Write-Output "COMANDO: choco install $($app.ID) -y"
+                        & choco install $app.ID -y *>&1 | ForEach-Object { Write-Output "  $_" }
+                        if ($LASTEXITCODE -ne 0) {
+                            Write-Warning "Falha ao instalar $($app.Nome) via Chocolatey. Codigo de saida: $LASTEXITCODE"
+                        } else {
+                            Write-Output "$($app.Nome) instalado com sucesso via Chocolatey!"
+                        }
+                    } catch {
+                        Write-Warning "ERRO: Falha critica ao instalar $($app.Nome) via Chocolatey. $($_.Exception.Message)"
+                    }
+                    return
+                }
+
+                # Instalação normal para todos os outros aplicativos
+                $wingetArgs = @("install", "--id", $app.ID, "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity")
+                if (($app.ID -match "^\w{12}$") -and ($app.ID -ne "Microsoft.Office")) { 
+                    $wingetArgs += "--source", "msstore"
+                    Write-Output "INFO: ID detectado como da Microsoft Store." 
+                }
+                Write-Output "COMANDO: winget $($wingetArgs -join ' ')"
+                try { 
+                    & winget @wingetArgs *>&1 | ForEach-Object { Write-Output "  $_" }
+                    if ($LASTEXITCODE -ne 0) { 
+                        Write-Warning "Falha ao instalar $($app.Nome). Codigo de saida: $LASTEXITCODE" 
+                    } else { 
+                        Write-Output "$($app.Nome) instalado com sucesso." 
+                    } 
+                } catch { 
+                    Write-Warning "ERRO: Falha critica ao instalar $($app.Nome). $($_.Exception.Message)" 
+                }
+            } -ArgumentList $appParaInstalar
+        } else {
+            $taskTimer.Stop(); Log-Message "`n------------------------------------------------------------"; Log-Message "Todas as tarefas foram concluidas."
+            $actionPanel.Enabled = $true; $driversGroupBox.Enabled = $true; $otherTasksGroupBox.Enabled = $true;
+        }
+    })
+
+    $disableUi = {
+        $actionPanel.Enabled = $false
+        $driversGroupBox.Enabled = $false
+        $otherTasksGroupBox.Enabled = $false
+        $logTextBox.Clear()
+        $script:installQueue.Clear()
+    }
+
+    $installButton.Add_Click({
+        $selectedApps = $appButtons | Where-Object { $_.BackColor -eq $selectedButtonColor } | Select-Object -ExpandProperty Tag
+        if ($selectedApps.Count -eq 0) { [System.Windows.Forms.MessageBox]::Show("Nenhum aplicativo selecionado para instalacao.", "Aviso", "OK", "Warning"); return }
+        & $disableUi
+        $selectedApps | ForEach-Object { $script:installQueue.Enqueue($_) }
+        Log-Message "Iniciando processo de instalacao em fila..."
+        $taskTimer.Start()
+    })
+
+    $nvidiaButton.Add_Click({
+        & $disableUi
+        $script:installJob = Start-Job -ScriptBlock {
+            function Invoke-NvidiaDriverInstall { 
+                [CmdletBinding()] 
+                param()
+                Write-Output "--- INICIANDO PROCESSO DE ATUALIZACAO DE DRIVER NVIDIA VIA CHOCOLATEY ---"
+                Write-Output "Executando o comando para instalar o driver NVIDIA..."
+                try { 
+                    & choco install nvidia-display-driver -y *>&1 | ForEach-Object { Write-Output "  $_" }
+                    if ($LASTEXITCODE -ne 0) { 
+                        Write-Warning "O processo do Chocolatey terminou com o codigo de saida: $LASTEXITCODE."
+                    } else { 
+                        Write-Output "Driver NVIDIA instalado/atualizado com sucesso!" 
+                    }
+                } catch { 
+                    Write-Output "ERRO: Falha ao executar o comando do Chocolatey. Detalhes: $($_.Exception.Message)" 
+                }
+                Write-Output "Processo de instalacao do driver NVIDIA concluido."
+            }
+            Invoke-NvidiaDriverInstall
+        }
+        $taskTimer.Start()
+    })
+
+    $amdGpuButton.Add_Click({
+        & $disableUi
+        $script:installJob = Start-Job -ScriptBlock {
+            function Invoke-AmdGpuDriverInstall { [CmdletBinding()] param(); Write-Output "--- INICIANDO PROCESSO DE ATUALIZACAO DE SOFTWARE AMD GPU VIA WINGET ---"; $PackageId = "AMD.AMDSoftwareCloudEdition"; Write-Output "[1/2] Verificando o pacote '$PackageId' no repositorio Winget..."; try { $searchResult = winget search --id $PackageId *>&1; if ($searchResult -match "No package found matching input criteria.") { Write-Output "ERRO: O pacote de software '$PackageId' nao foi encontrado."; return }; Write-Output "   Pacote de software encontrado com sucesso!" } catch { Write-Output "ERRO: Falha ao executar o comando 'winget'."; return }; Write-Output "[2/2] Iniciando o download e a instalacao via Winget..."; $wingetArgs = "install --id $PackageId --exact --source winget --accept-package-agreements --accept-source-agreements --disable-interactivity"; try { $process = Start-Process winget -ArgumentList $wingetArgs -Wait -PassThru -NoNewWindow; if ($process.ExitCode -eq 0) { Write-Output "Software AMD GPU instalado/atualizado com sucesso!" } else { Write-Output "AVISO: Winget terminou com o codigo de saida: $($process.ExitCode)." } } catch { Write-Output "ERRO: Falha ao iniciar a instalacao do Winget. Detalhes: $($_.Exception.Message)" } }
+            Invoke-AmdGpuDriverInstall
+        }
+        $taskTimer.Start()
+    })
+
+    $amdChipsetButton.Add_Click({
+        & $disableUi
+        $script:installJob = Start-Job -ScriptBlock {
+            function Invoke-AmdChipsetDriverInstall { 
+                [CmdletBinding()] 
+                param()
+                Write-Output "--- INICIANDO PROCESSO DE INSTALACAO DO CHIPSET AMD VIA CHOCOLATEY ---"
+                Write-Output "Executando o comando para instalar o chipset AMD..."
+                try { 
+                    & choco install amd-ryzen-chipset -y *>&1 | ForEach-Object { Write-Output "  $_" }
+                    if ($LASTEXITCODE -ne 0) { 
+                        Write-Warning "O processo do Chocolatey terminou com o codigo de saida: $LASTEXITCODE."
+                    } else { 
+                        Write-Output "Driver de Chipset AMD instalado/atualizado com sucesso!" 
+                    }
+                } catch { 
+                    Write-Output "ERRO: Falha ao executar o comando do Chocolatey. Detalhes: $($_.Exception.Message)" 
+                }
+                Write-Output "Processo de instalacao do chipset AMD concluido."
+            }
+            Invoke-AmdChipsetDriverInstall
+        }
+        $taskTimer.Start()
+    })
+
+    $activatorButton.Add_Click({
+        $confirmation = [System.Windows.Forms.MessageBox]::Show("AVISO DE SEGURANCA:`n`nVoce esta prestes a executar um script de ativacao baixado da internet (`get.activated.win`). Executar scripts de fontes nao confiaveis pode ser perigoso.`n`nDeseja continuar?","Confirmacao de Seguranca", "YesNo", "Warning")
+        if ($confirmation -eq 'No') { Log-Message "Operacao do ativador cancelada pelo usuario."; return }
+        & $disableUi
+        Log-Message "Executando o ativador...";
+        try { Invoke-RestMethod -Uri "https://get.activated.win" | Invoke-Expression; Log-Message "Comando do ativador concluido com sucesso." }
+        catch { Log-Message "ERRO: Falha ao executar o ativador: $($_.Exception.Message)" }
+        finally { $actionPanel.Enabled = $true; $driversGroupBox.Enabled = $true; $otherTasksGroupBox.Enabled = $true }
+    })
+
+    $selectDefaultButton.Add_Click({ foreach ($btn in $appButtons) { if ($btn.Tag.IsDefault) { $btn.BackColor = $selectedButtonColor; $btn.FlatAppearance.BorderColor = $selectedButtonBorderColor } } })
+    $selectAllButton.Add_Click({ foreach ($btn in $appButtons) { $btn.BackColor = $selectedButtonColor; $btn.FlatAppearance.BorderColor = $selectedButtonBorderColor } })
+    $deselectAllButton.Add_Click({ foreach ($btn in $appButtons) { $btn.BackColor = $defaultButtonColor; $btn.FlatAppearance.BorderColor = [System.Drawing.Color]::LightGray } })
+
+    $mainForm.Add_FormClosing({ $taskTimer.Stop(); if($null -ne $script:installJob) { Remove-Job -Job $script:installJob -Force } })
+    #endregion
+
+    #region EXECUTION
+    $mainForm.ShowDialog()
+    #endregion
+}
+finally {
+    if ($MyInvocation.MyCommand.Path -and $MyInvocation.MyCommand.Path.StartsWith($env:TEMP)) {
+        Remove-Item $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyContinue
+    }
+}
