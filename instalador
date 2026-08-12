@@ -22,8 +22,26 @@
       - Origem do pacote declarada por item (winget / msstore / choco), no lugar da deteccao por
         regex de 12 caracteres, que classificava errado IDs da Store com 14 caracteres.
 
+    Versao 16.1 - revisao de todos os IDs contra os repositorios reais:
+      - AnyDesk: 'anydesk.anydesk' nao existe no winget (era um ID em formato Chocolatey).
+        Corrigido para AnyDesk.AnyDesk. O item vinha marcado por padrao, entao falhava sempre.
+      - Bootstrap do Winget: o pacote 'microsoft-winget' nao existe; o correto e 'winget-cli'.
+      - Botao AMD: 'AMD.AMDSoftwareCloudEdition' e a edicao para VM / cloud gaming, parada na
+        23.Q3. Trocado pelo Adrenalin Edition (desktop) via Chocolatey.
+      - Office: pacote choco publicado em 05/05/2024 trocado por Microsoft.Office (winget).
+      - Python: a versao da Store estava presa no 3.12; agora Python.Python.3.13 via winget.
+      - Google Drive, VirtualBox, TreeSize Free e TeamViewer migrados para o winget (mesma
+        versao dos pacotes antigos), reduzindo a dependencia do Chocolatey.
+      - Falhas de pacotes da Microsoft Store agora explicam a causa provavel no log.
+
+    Versao 16.2:
+      - Botao "Verificar drivers": compara o que esta instalado (video NVIDIA / AMD e chipset
+        AMD) com as versoes dos repositorios e sugere atualizacao. Nao instala nada.
+      - Botao "NVIDIA App" (sucessor do GeForce Experience), separado do driver puro.
+      - NodeJS passou da linha 'current' para a LTS.
+
 .VERSION
-    16.0
+    16.2
 #>
 #endregion
 
@@ -36,7 +54,7 @@
 $ScriptUrl = 'https://is.gd/posinstalador'
 
 $AppTitle   = 'Pos Instalador de Aplicativos'
-$AppVersion = '16.0'
+$AppVersion = '16.2'
 
 #region ELEVACAO
 # Forca TLS 1.2 (necessario em instalacoes antigas do Windows para baixar de HTTPS)
@@ -102,6 +120,73 @@ public static extern bool SetProcessDPIAware();
     Add-Type -AssemblyName System.Drawing
     try { [System.Windows.Forms.Application]::EnableVisualStyles() } catch { }
     try { [System.Windows.Forms.Application]::SetCompatibleTextRenderingDefault($false) } catch { }
+
+    # Fator de escala da tela (1.0 = 96 dpi, 1.25 = 125%, 1.5 = 150%...).
+    # As fontes sao declaradas em pontos, entao o Windows ja as desenha maiores em telas
+    # escaladas; quem NAO cresce sozinho e todo tamanho fixo em pixel. Por isso cada medida
+    # em pixel deste script passa por Px(). O auto-scaling do WinForms fica desligado
+    # (AutoScaleMode = None) para nao aplicar um segundo fator por baixo dos panos.
+    $script:DpiScale = 1.0
+    try {
+        $gfx = [Drawing.Graphics]::FromHwnd([IntPtr]::Zero)
+        if ($gfx.DpiX -gt 0) { $script:DpiScale = $gfx.DpiX / 96.0 }
+        $gfx.Dispose()
+    } catch { }
+
+    function Px {
+        param([double]$Pixels)
+        return [int][Math]::Round($Pixels * $script:DpiScale)
+    }
+
+    # Largura que um texto realmente ocupa, medida na fonte real e no DPI real.
+    function Get-TextWidth {
+        param([string]$Text, [Drawing.Font]$Font)
+        return [Windows.Forms.TextRenderer]::MeasureText($Text, $Font).Width
+    }
+
+    # --- Cantos arredondados -------------------------------------------------------------
+    # O WinForms nao tem propriedade de raio de canto. O caminho e recortar o controle com
+    # uma Region em forma de retangulo arredondado; os cantos passam a mostrar o fundo do
+    # painel atras. Funciona com o desenho nativo do botao, entao hover, clique e estado
+    # desabilitado continuam se comportando normalmente.
+    function Set-ControlRegion {
+        param([Windows.Forms.Control]$Control, [int]$Radius)
+
+        if ($Control.Width -le 0 -or $Control.Height -le 0) { return }
+
+        $d = [Math]::Max(2, $Radius * 2)
+        if ($d -gt $Control.Height) { $d = $Control.Height }
+        if ($d -gt $Control.Width)  { $d = $Control.Width  }
+
+        $w = $Control.Width
+        $h = $Control.Height
+
+        $path = New-Object Drawing.Drawing2D.GraphicsPath
+        $path.AddArc(0, 0, $d, $d, 180, 90)
+        $path.AddArc(($w - $d), 0, $d, $d, 270, 90)
+        $path.AddArc(($w - $d), ($h - $d), $d, $d, 0, 90)
+        $path.AddArc(0, ($h - $d), $d, $d, 90, 90)
+        $path.CloseFigure()
+
+        # Descarta a Region anterior: os botoes em Dock='Fill' sao redimensionados a cada
+        # mudanca de tamanho da janela, e sem isso vazariam handles do GDI.
+        $anterior = $Control.Region
+        $Control.Region = New-Object Drawing.Region($path)
+        if ($anterior) { $anterior.Dispose() }
+        $path.Dispose()
+    }
+
+    function Set-Rounded {
+        param([Windows.Forms.Control]$Control, [int]$Radius = 0)
+
+        if ($Radius -le 0) { $Radius = Px 6 }
+        $raio = $Radius
+
+        # GetNewClosure() fixa o valor de $raio no scriptblock. Sem isso, o handler leria a
+        # variavel so na hora do evento, quando ela ja teria outro valor (ou nenhum).
+        $Control.Add_Resize({ Set-ControlRegion $this $raio }.GetNewClosure())
+        Set-ControlRegion $Control $raio
+    }
     #endregion
 
     #region TEMA
@@ -152,32 +237,42 @@ public static extern bool SetProcessDPIAware();
             @{ Nome = 'Discord';       ID = 'Discord.Discord'               }
         )
         'Produtividade' = @(
-            @{ Nome = 'Microsoft Office'; ID = 'office365proplus'; Src = 'choco'; Def = $true }
+            # Microsoft 365 Apps for enterprise, mantido pela propria Microsoft. Substituiu o
+            # pacote choco office365proplus, cuja ultima publicacao foi em 05/05/2024.
+            @{ Nome = 'Microsoft Office'; ID = 'Microsoft.Office'; Def = $true }
             @{ Nome = 'LibreOffice';   ID = 'TheDocumentFoundation.LibreOffice' }
             @{ Nome = 'OneDrive';      ID = 'Microsoft.OneDrive'            }
-            @{ Nome = 'Google Drive';  ID = 'googledrive';     Src = 'choco' }
+            @{ Nome = 'Google Drive';  ID = 'Google.GoogleDrive'            }
             @{ Nome = 'Notepad++';     ID = 'Notepad++.Notepad++'           }
             @{ Nome = '7zip';          ID = '7zip.7zip';       Def = $true  }
             @{ Nome = 'Asana';         ID = 'Asana.Asana'                   }
             @{ Nome = 'Trello';        ID = '9NBLGGH4XXVW';    Src = 'msstore' }
         )
         'Utilitarios' = @(
-            @{ Nome = 'AnyDesk';       ID = 'anydesk.anydesk'; Def = $true  }
+            # 'anydesk.anydesk' era um ID no formato do Chocolatey e nao existe no winget:
+            # o item falhava em toda instalacao, apesar de vir marcado por padrao.
+            @{ Nome = 'AnyDesk';       ID = 'AnyDesk.AnyDesk'; Def = $true  }
+            # RustDesk nao tem pacote no winget; segue pelo Chocolatey.
             @{ Nome = 'RustDesk';      ID = 'rustdesk.install'; Src = 'choco' }
-            @{ Nome = 'Teamviewer';    ID = 'XPDM17HK323C4X';  Src = 'msstore' }
+            @{ Nome = 'Teamviewer';    ID = 'TeamViewer.TeamViewer'         }
             @{ Nome = 'PowerToys';     ID = 'Microsoft.PowerToys'           }
-            @{ Nome = 'TreeSize Free'; ID = 'XP9M26RSCLNT88';  Src = 'msstore' }
+            @{ Nome = 'TreeSize Free'; ID = 'JAMSoftware.TreeSize.Free'     }
             @{ Nome = 'qBittorrent';   ID = 'qBittorrent.qBittorrent'       }
             @{ Nome = 'LGHUB';         ID = 'Logitech.GHUB'                 }
-            @{ Nome = 'VirtualBox';    ID = 'virtualbox';      Src = 'choco' }
+            @{ Nome = 'VirtualBox';    ID = 'Oracle.VirtualBox'             }
+            # Guest Additions: instalado no host fica disponivel para ser usado depois
+            # dentro das VMs criadas. Nao tem pacote equivalente no winget.
             @{ Nome = 'VBox Guest Add.'; ID = 'virtualbox-guest-additions-guest.install'; Src = 'choco' }
         )
         'Desenvolvimento' = @(
             @{ Nome = 'VS Code';       ID = 'Microsoft.VisualStudioCode'    }
             @{ Nome = 'Git';           ID = 'Git.Git'                       }
-            @{ Nome = 'Python 3';      ID = '9NCVDN91XZQP';    Src = 'msstore' }
+            # A versao da Microsoft Store estava presa no Python 3.12 e roda em sandbox,
+            # o que atrapalha pip e PATH em alguns fluxos.
+            @{ Nome = 'Python 3';      ID = 'Python.Python.3.13'            }
             @{ Nome = 'Anaconda';      ID = 'Anaconda.Anaconda3'            }
-            @{ Nome = 'NodeJS';        ID = 'OpenJS.NodeJS'                 }
+            # Linha LTS (24.x), nao a 'current' (26.x): e a recomendada para maquina de trabalho.
+            @{ Nome = 'NodeJS LTS';    ID = 'OpenJS.NodeJS.LTS'             }
             @{ Nome = 'Cmake';         ID = 'Kitware.CMake'                 }
             @{ Nome = 'MongoDB Server';ID = 'MongoDB.Server'                }
             @{ Nome = 'MongoDB Tools'; ID = 'MongoDB.DatabaseTools'         }
@@ -223,61 +318,76 @@ public static extern bool SetProcessDPIAware();
     $mainForm.FormBorderStyle = 'Sizable'
     $mainForm.MaximizeBox     = $true
     $mainForm.MinimizeBox     = $true
-    $mainForm.AutoScaleMode   = 'Font'
+    $mainForm.AutoScaleMode   = 'None'
     $mainForm.Font            = $FontUI
     $mainForm.BackColor       = $Theme.Bg
     $mainForm.ForeColor       = $Theme.Text
-    # Tamanho de projeto (96 dpi). Em telas com escala, e reajustado no evento Shown.
-    $mainForm.ClientSize      = New-Object Drawing.Size(1120, 720)
-    $mainForm.MinimumSize     = New-Object Drawing.Size(820, 560)
+    $mainForm.ClientSize      = New-Object Drawing.Size((Px 1120), (Px 720))
+    $mainForm.MinimumSize     = New-Object Drawing.Size((Px 820), (Px 560))
 
     # --- Divisor principal: selecao (cima) x log (baixo) ---
     $split = New-Object Windows.Forms.SplitContainer
     $split.Dock            = 'Fill'
     $split.Orientation     = 'Horizontal'
-    $split.SplitterWidth   = 7
+    $split.SplitterWidth   = Px 7
     $split.BackColor       = $Theme.Border
-    $split.Panel1MinSize   = 120
-    $split.Panel2MinSize   = 120
+    $split.Panel1MinSize   = Px 120
+    $split.Panel2MinSize   = Px 120
     $split.FixedPanel      = 'None'
     $split.Panel1.BackColor = $Theme.Bg
     $split.Panel2.BackColor = $Theme.Bg
-    $split.Panel1.Padding  = New-Object Windows.Forms.Padding(10, 8, 10, 4)
-    $split.Panel2.Padding  = New-Object Windows.Forms.Padding(10, 4, 10, 6)
+    $split.Panel1.Padding  = New-Object Windows.Forms.Padding((Px 10), (Px 8), (Px 10), (Px 4))
+    $split.Panel2.Padding  = New-Object Windows.Forms.Padding((Px 10), (Px 4), (Px 10), (Px 6))
 
     # --- Cabecalho ---
+    # Empilhado por FlowLayoutPanel com AutoSize: a altura vem da altura real do texto,
+    # em vez de coordenadas Y fixas que se sobrepoem quando a fonte cresce com o DPI.
     $header = New-Object Windows.Forms.Panel
-    $header.Dock      = 'Top'
-    $header.Height    = 46
-    $header.BackColor = $Theme.HeaderBg
+    $header.Dock         = 'Top'
+    $header.AutoSize     = $true
+    $header.AutoSizeMode = 'GrowAndShrink'
+    $header.BackColor    = $Theme.HeaderBg
+    $header.Padding      = New-Object Windows.Forms.Padding((Px 14), (Px 7), (Px 14), (Px 7))
+
+    $headerStack = New-Object Windows.Forms.FlowLayoutPanel
+    $headerStack.Dock          = 'Top'
+    $headerStack.FlowDirection = 'TopDown'
+    $headerStack.WrapContents  = $false
+    $headerStack.AutoSize      = $true
+    $headerStack.AutoSizeMode  = 'GrowAndShrink'
+    $headerStack.Margin        = New-Object Windows.Forms.Padding(0)
+    $headerStack.Padding       = New-Object Windows.Forms.Padding(0)
 
     $titleLabel = New-Object Windows.Forms.Label
     $titleLabel.Text      = $AppTitle
     $titleLabel.Font      = New-Object Drawing.Font('Segoe UI Semibold', 12)
     $titleLabel.ForeColor = $Theme.HeaderFg
     $titleLabel.AutoSize  = $true
-    $titleLabel.Location  = New-Object Drawing.Point(14, 8)
-    $header.Controls.Add($titleLabel)
+    $titleLabel.Margin    = New-Object Windows.Forms.Padding(0)
 
     $subLabel = New-Object Windows.Forms.Label
     $subLabel.Text      = "v$AppVersion   |   $env:COMPUTERNAME   |   executando como Administrador"
     $subLabel.Font      = New-Object Drawing.Font('Segoe UI', 8)
     $subLabel.ForeColor = $Theme.HeaderDim
     $subLabel.AutoSize  = $true
-    $subLabel.Location  = New-Object Drawing.Point(16, 28)
-    $header.Controls.Add($subLabel)
+    $subLabel.Margin    = New-Object Windows.Forms.Padding((Px 2), (Px 1), 0, 0)
+
+    $headerStack.Controls.Add($titleLabel)
+    $headerStack.Controls.Add($subLabel)
+    $header.Controls.Add($headerStack)
 
     # --- Barra inferior: progresso e acoes principais ---
     $bottomBar = New-Object Windows.Forms.Panel
     $bottomBar.Dock    = 'Bottom'
-    $bottomBar.Height  = 56
-    $bottomBar.Padding = New-Object Windows.Forms.Padding(10, 6, 10, 10)
+    $bottomBar.Height  = Px 58
+    $bottomBar.Padding = New-Object Windows.Forms.Padding((Px 10), (Px 6), (Px 10), (Px 10))
 
+    # A largura vem do texto medido na fonte real, com folga; nunca de um numero fixo.
     $installButton = New-Object Windows.Forms.Button
     $installButton.Text      = 'INSTALAR SELECIONADOS'
     $installButton.Dock      = 'Right'
-    $installButton.Width     = 210
     $installButton.Font      = $FontUIBold
+    $installButton.Width     = (Get-TextWidth $installButton.Text $FontUIBold) + (Px 30)
     $installButton.FlatStyle = 'Flat'
     $installButton.FlatAppearance.BorderSize = 0
     $installButton.BackColor = $Theme.Green
@@ -287,30 +397,40 @@ public static extern bool SetProcessDPIAware();
     $cancelButton = New-Object Windows.Forms.Button
     $cancelButton.Text      = 'Cancelar'
     $cancelButton.Dock      = 'Right'
-    $cancelButton.Width     = 100
+    $cancelButton.Font      = $FontUI
+    $cancelButton.Width     = (Get-TextWidth $cancelButton.Text $FontUI) + (Px 30)
     $cancelButton.FlatStyle = 'Flat'
     $cancelButton.BackColor = $Theme.PanelBg
     $cancelButton.FlatAppearance.BorderColor = $Theme.Border
     $cancelButton.Enabled   = $false
-    $cancelButton.Margin    = New-Object Windows.Forms.Padding(6, 0, 6, 0)
+
+    Set-Rounded $installButton
+    Set-Rounded $cancelButton
+
+    # Controles em Dock ignoram Margin, por isso Cancelar e Instalar ficavam encostados.
+    # A separacao precisa vir de paineis vazios inseridos entre eles.
+    $gapCancelInstall = New-Object Windows.Forms.Panel
+    $gapCancelInstall.Dock  = 'Right'
+    $gapCancelInstall.Width = Px 12
 
     $spacer = New-Object Windows.Forms.Panel
     $spacer.Dock  = 'Right'
-    $spacer.Width = 10
+    $spacer.Width = Px 18
 
     $progressPanel = New-Object Windows.Forms.Panel
     $progressPanel.Dock = 'Fill'
 
     $statusLabel = New-Object Windows.Forms.Label
     $statusLabel.Dock      = 'Top'
-    $statusLabel.Height    = 18
+    $statusLabel.Height    = $FontUI.Height + (Px 2)
     $statusLabel.Text      = 'Pronto.'
     $statusLabel.ForeColor = $Theme.Text
     $statusLabel.TextAlign = 'MiddleLeft'
+    $statusLabel.AutoEllipsis = $true
 
     $progressBar = New-Object Windows.Forms.ProgressBar
     $progressBar.Dock    = 'Top'
-    $progressBar.Height  = 14
+    $progressBar.Height  = Px 14
     $progressBar.Minimum = 0
     $progressBar.Maximum = 1
     $progressBar.Value   = 0
@@ -318,26 +438,31 @@ public static extern bool SetProcessDPIAware();
     $progressPanel.Controls.Add($progressBar)
     $progressPanel.Controls.Add($statusLabel)
 
+    # A ordem importa: o indice 0 e o ULTIMO a fazer dock, entao o adicionado por ultimo fica
+    # mais a direita. Resultado da esquerda para a direita:
+    #   [progresso] [espaco] [Cancelar] [espaco] [INSTALAR SELECIONADOS]
     $bottomBar.Controls.Add($progressPanel)
     $bottomBar.Controls.Add($spacer)
     $bottomBar.Controls.Add($cancelButton)
+    $bottomBar.Controls.Add($gapCancelInstall)
     $bottomBar.Controls.Add($installButton)
 
     # --- Drivers e ferramentas (linha unica e compacta) ---
     $toolsBox = New-Object Windows.Forms.GroupBox
     $toolsBox.Text      = ' Drivers e ferramentas '
     $toolsBox.Dock      = 'Bottom'
-    $toolsBox.Height    = 58
+    $toolsBox.Height    = $FontUIBold.Height + (Px 40)
     $toolsBox.Font      = $FontUIBold
     $toolsBox.ForeColor = $Theme.Text
-    $toolsBox.Padding   = New-Object Windows.Forms.Padding(8, 2, 8, 6)
+    $toolsBox.Padding   = New-Object Windows.Forms.Padding((Px 8), (Px 2), (Px 8), (Px 6))
 
+    $toolsColumns = 7
     $toolsTable = New-Object Windows.Forms.TableLayoutPanel
     $toolsTable.Dock        = 'Fill'
-    $toolsTable.ColumnCount = 5
+    $toolsTable.ColumnCount = $toolsColumns
     $toolsTable.RowCount    = 1
-    1..5 | ForEach-Object {
-        $toolsTable.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle([Windows.Forms.SizeType]::Percent, 20))) | Out-Null
+    1..$toolsColumns | ForEach-Object {
+        $toolsTable.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle([Windows.Forms.SizeType]::Percent, (100 / $toolsColumns)))) | Out-Null
     }
 
     function New-ToolButton {
@@ -345,28 +470,41 @@ public static extern bool SetProcessDPIAware();
         $b = New-Object Windows.Forms.Button
         $b.Text      = $Text
         $b.Dock      = 'Fill'
-        $b.Margin    = New-Object Windows.Forms.Padding(3)
+        $b.Margin    = New-Object Windows.Forms.Padding((Px 3))
         $b.FlatStyle = 'Flat'
         $b.Font      = $FontUI
         $b.Cursor    = 'Hand'
         $b.BackColor = $Back
         $b.ForeColor = $Fore
         $b.FlatAppearance.BorderSize = 0
+        Set-Rounded $b
         return $b
     }
 
+    # O primeiro botao apenas diagnostica (nao instala nada), por isso a cor neutra.
+    $checkDriversButton = New-ToolButton 'Verificar drivers' ([Drawing.Color]::FromArgb(2, 132, 199)) ([Drawing.Color]::White)
     $nvidiaButton    = New-ToolButton 'Driver NVIDIA'    $Theme.Nvidia ([Drawing.Color]::White)
-    $amdGpuButton    = New-ToolButton 'Software AMD GPU' $Theme.Amd    ([Drawing.Color]::White)
+    $nvidiaAppButton = New-ToolButton 'NVIDIA App'       $Theme.Nvidia ([Drawing.Color]::White)
+    $amdGpuButton    = New-ToolButton 'AMD Adrenalin'    $Theme.Amd    ([Drawing.Color]::White)
     $amdChipsetButton= New-ToolButton 'Chipset AMD'      $Theme.Amd    ([Drawing.Color]::White)
     $upgradeButton   = New-ToolButton 'Atualizar tudo'   ([Drawing.Color]::FromArgb(51, 65, 85)) ([Drawing.Color]::White)
     $activatorButton = New-ToolButton 'Rodar Ativador'   $Theme.Orange ([Drawing.Color]::White)
 
-    $toolsTable.Controls.Add($nvidiaButton,     0, 0)
-    $toolsTable.Controls.Add($amdGpuButton,     1, 0)
-    $toolsTable.Controls.Add($amdChipsetButton, 2, 0)
-    $toolsTable.Controls.Add($upgradeButton,    3, 0)
-    $toolsTable.Controls.Add($activatorButton,  4, 0)
+    $toolsTable.Controls.Add($checkDriversButton, 0, 0)
+    $toolsTable.Controls.Add($nvidiaButton,       1, 0)
+    $toolsTable.Controls.Add($nvidiaAppButton,    2, 0)
+    $toolsTable.Controls.Add($amdGpuButton,       3, 0)
+    $toolsTable.Controls.Add($amdChipsetButton,   4, 0)
+    $toolsTable.Controls.Add($upgradeButton,      5, 0)
+    $toolsTable.Controls.Add($activatorButton,    6, 0)
     $toolsBox.Controls.Add($toolsTable)
+
+    $tipTools = New-Object Windows.Forms.ToolTip
+    $tipTools.SetToolTip($checkDriversButton, "Compara os drivers instalados com as versoes dos repositorios.`nSo relata: nao instala nada.")
+    $tipTools.SetToolTip($nvidiaButton,       'Driver de video NVIDIA (pacote nvidia-display-driver)')
+    $tipTools.SetToolTip($nvidiaAppButton,    'NVIDIA App: painel atual da NVIDIA, sucessor do GeForce Experience')
+    $tipTools.SetToolTip($amdGpuButton,       'AMD Software: Adrenalin Edition (video AMD para desktop)')
+    $tipTools.SetToolTip($amdChipsetButton,   'Drivers de chipset AMD (AM4 / AM5 / TR4)')
 
     # Fill primeiro (indice 0 e o ultimo a fazer dock), depois as bordas.
     $mainForm.Controls.Add($split)
@@ -381,52 +519,66 @@ public static extern bool SetProcessDPIAware();
     $appsPanel.AutoScroll  = $true
     $appsPanel.BackColor   = $Theme.Bg
 
-    $toolbar = New-Object Windows.Forms.Panel
-    $toolbar.Dock   = 'Top'
-    $toolbar.Height = 34
+    # Barra em FlowLayoutPanel: cada item se posiciona depois do anterior, entao nada colide
+    # quando o texto cresce com o DPI ou com o idioma do sistema.
+    $toolbar = New-Object Windows.Forms.FlowLayoutPanel
+    $toolbar.Dock          = 'Top'
+    $toolbar.FlowDirection = 'LeftToRight'
+    $toolbar.WrapContents  = $false
+    $toolbar.AutoSize      = $true
+    $toolbar.AutoSizeMode  = 'GrowAndShrink'
+    $toolbar.Padding       = New-Object Windows.Forms.Padding(0, 0, 0, (Px 4))
 
     $searchBox = New-Object Windows.Forms.TextBox
-    $searchBox.Location = New-Object Drawing.Point(0, 4)
-    $searchBox.Width    = 200
-    $searchBox.Height   = 24
-    $toolbar.Controls.Add($searchBox)
+    $searchBox.Width  = Px 200
+    $searchBox.Font   = $FontUI
+    $searchBox.Margin = New-Object Windows.Forms.Padding(0, 0, (Px 10), 0)
 
     $searchHint = New-Object Windows.Forms.Label
     $searchHint.Text      = 'Filtrar programas...'
+    $searchHint.Font      = $FontUI
     $searchHint.ForeColor = [Drawing.Color]::Gray
     $searchHint.BackColor = [Drawing.Color]::White
     $searchHint.AutoSize  = $true
-    $searchHint.Location  = New-Object Drawing.Point(4, 8)
+    $searchHint.Location  = New-Object Drawing.Point((Px 3), (Px 3))
     $searchHint.Parent    = $searchBox
     $searchHint.BringToFront()
 
+    # Altura comum de todos os controles da barra, derivada da altura real da caixa de texto.
+    $barItemHeight = $searchBox.Height
+
     function New-SmallButton {
-        param([string]$Text, [int]$X, [int]$W)
+        param([string]$Text)
         $b = New-Object Windows.Forms.Button
         $b.Text      = $Text
-        $b.Location  = New-Object Drawing.Point($X, 3)
-        $b.Size      = New-Object Drawing.Size($W, 26)
+        $b.Font      = $FontUI
+        $b.AutoSize  = $false
+        $b.Height    = $barItemHeight
+        $b.Width     = (Get-TextWidth $Text $FontUI) + (Px 22)
+        $b.Margin    = New-Object Windows.Forms.Padding(0, 0, (Px 5), 0)
         $b.FlatStyle = 'Flat'
         $b.BackColor = $Theme.PanelBg
-        $b.Font      = $FontUI
         $b.Cursor    = 'Hand'
         $b.FlatAppearance.BorderColor = $Theme.Border
+        Set-Rounded $b (Px 5)
         return $b
     }
 
-    $selectDefaultButton = New-SmallButton 'Padrao'   210 78
-    $selectAllButton     = New-SmallButton 'Todos'    292 66
-    $deselectAllButton   = New-SmallButton 'Nenhum'   362 70
-    $invertButton        = New-SmallButton 'Inverter' 436 78
+    $selectDefaultButton = New-SmallButton 'Padrao'
+    $selectAllButton     = New-SmallButton 'Todos'
+    $deselectAllButton   = New-SmallButton 'Nenhum'
+    $invertButton        = New-SmallButton 'Inverter'
 
     $countLabel = New-Object Windows.Forms.Label
     $countLabel.Text      = '0 selecionados'
-    $countLabel.Location  = New-Object Drawing.Point(524, 8)
     $countLabel.AutoSize  = $true
     $countLabel.Font      = $FontUIBold
     $countLabel.ForeColor = $Theme.Green
+    $countLabel.TextAlign = 'MiddleLeft'
+    $countLabel.Margin    = New-Object Windows.Forms.Padding((Px 8), 0, 0, 0)
+    $countLabel.MinimumSize = New-Object Drawing.Size(0, $barItemHeight)
 
-    $toolbar.Controls.AddRange(@($selectDefaultButton, $selectAllButton, $deselectAllButton, $invertButton, $countLabel))
+    $toolbar.Controls.AddRange(@($searchBox, $selectDefaultButton, $selectAllButton, $deselectAllButton, $invertButton, $countLabel))
 
     $split.Panel1.Controls.Add($appsPanel)
     $split.Panel1.Controls.Add($toolbar)
@@ -434,6 +586,10 @@ public static extern bool SetProcessDPIAware();
     # --- Monta as categorias e os "chips" de aplicativo ---
     $tip = New-Object Windows.Forms.ToolTip
     $tip.InitialDelay = 400
+
+    # Dimensoes dos chips, derivadas da altura real da fonte (nao de um numero fixo em pixel).
+    $chipHeight = $FontChip.Height + (Px 10)
+    $chipGap    = Px 4
 
     foreach ($catName in $appCatalog.Keys) {
         $groupBox = New-Object Windows.Forms.GroupBox
@@ -463,21 +619,21 @@ public static extern bool SetProcessDPIAware();
             $chip.TextAlign  = 'MiddleCenter'
             $chip.FlatStyle  = 'Flat'
             $chip.Font       = $FontChip
-            $chip.Margin     = New-Object Windows.Forms.Padding(0, 0, 4, 4)
+            $chip.Margin     = New-Object Windows.Forms.Padding(0, 0, $chipGap, $chipGap)
             $chip.BackColor  = $Theme.ChipBg
             $chip.Cursor     = 'Hand'
-            # Cada chip se dimensiona pelo proprio rotulo: "VLC" ocupa muito menos que
-            # "Microsoft Office", o que empacota bem mais itens por linha do que uma
-            # largura uniforme e reduz a altura total da area de selecao.
-            # (CheckBox nao expoe AutoSizeMode publicamente, ao contrario de Button; AutoSize
-            #  sozinho ja encolhe e cresce conforme o texto.)
-            $chip.AutoSize    = $true
-            $chip.Padding     = New-Object Windows.Forms.Padding(10, 3, 10, 3)
-            $chip.MinimumSize = New-Object Drawing.Size(0, 25)
+            # Largura medida no texto real, com AutoSize desligado. Cada chip fica do tamanho
+            # do proprio rotulo ("VLC" bem menor que "Microsoft Office"), o que empacota muito
+            # mais itens por linha do que uma largura uniforme. Medir aqui, em vez de confiar no
+            # AutoSize, deixa o resultado deterministico: e a mesma conta usada em Update-AppLayout
+            # para prever onde o FlowLayoutPanel vai quebrar a linha.
+            $chip.AutoSize = $false
+            $chip.Size     = New-Object Drawing.Size(((Get-TextWidth $app.Nome $FontChip) + (Px 18)), $chipHeight)
             $chip.FlatAppearance.BorderSize          = 1
             $chip.FlatAppearance.BorderColor         = $Theme.ChipBorder
             $chip.FlatAppearance.CheckedBackColor    = $Theme.ChipOn
             $chip.FlatAppearance.MouseOverBackColor  = $Theme.ChipHover
+            Set-Rounded $chip (Px 5)
             $tip.SetToolTip($chip, "$($app.Nome)`n$($app.ID)  [$src]")
 
             # Apenas cor e borda mudam ao marcar. Alternar o peso da fonte redimensionaria o chip
@@ -501,26 +657,33 @@ public static extern bool SetProcessDPIAware();
     #endregion
 
     #region PAINEL INFERIOR: LOG
-    $logBar = New-Object Windows.Forms.Panel
-    $logBar.Dock   = 'Top'
-    $logBar.Height = 28
+    $logBar = New-Object Windows.Forms.FlowLayoutPanel
+    $logBar.Dock          = 'Top'
+    $logBar.FlowDirection = 'LeftToRight'
+    $logBar.WrapContents  = $false
+    $logBar.AutoSize      = $true
+    $logBar.AutoSizeMode  = 'GrowAndShrink'
+    $logBar.Padding       = New-Object Windows.Forms.Padding(0, 0, 0, (Px 3))
 
     $logLabel = New-Object Windows.Forms.Label
-    $logLabel.Text      = 'Log de execucao'
-    $logLabel.Font      = $FontUIBold
-    $logLabel.AutoSize  = $true
-    $logLabel.Location  = New-Object Drawing.Point(0, 6)
+    $logLabel.Text        = 'Log de execucao'
+    $logLabel.Font        = $FontUIBold
+    $logLabel.AutoSize    = $true
+    $logLabel.TextAlign   = 'MiddleLeft'
+    $logLabel.MinimumSize = New-Object Drawing.Size(0, $barItemHeight)
+    $logLabel.Margin      = New-Object Windows.Forms.Padding(0, 0, (Px 14), 0)
 
     $autoScrollCheck = New-Object Windows.Forms.CheckBox
-    $autoScrollCheck.Text     = 'Auto-rolagem'
-    $autoScrollCheck.Checked  = $true
-    $autoScrollCheck.AutoSize = $true
-    $autoScrollCheck.Location = New-Object Drawing.Point(130, 5)
+    $autoScrollCheck.Text        = 'Auto-rolagem'
+    $autoScrollCheck.Font        = $FontUI
+    $autoScrollCheck.Checked     = $true
+    $autoScrollCheck.AutoSize    = $true
+    $autoScrollCheck.MinimumSize = New-Object Drawing.Size(0, $barItemHeight)
+    $autoScrollCheck.Margin      = New-Object Windows.Forms.Padding(0, 0, (Px 14), 0)
 
-    $copyLogButton  = New-SmallButton 'Copiar'  250 66
-    $saveLogButton  = New-SmallButton 'Salvar'  320 66
-    $clearLogButton = New-SmallButton 'Limpar'  390 66
-    foreach ($b in @($copyLogButton, $saveLogButton, $clearLogButton)) { $b.Top = 1; $b.Height = 24 }
+    $copyLogButton  = New-SmallButton 'Copiar'
+    $saveLogButton  = New-SmallButton 'Salvar'
+    $clearLogButton = New-SmallButton 'Limpar'
 
     $logBar.Controls.AddRange(@($logLabel, $autoScrollCheck, $copyLogButton, $saveLogButton, $clearLogButton))
 
@@ -550,20 +713,23 @@ public static extern bool SetProcessDPIAware();
         if ($script:LayoutBusy) { return }
         if ($script:CatList.Count -eq 0) { return }
 
-        $avail = $appsPanel.ClientSize.Width - 2
-        if ($avail -lt 150) { return }
+        $avail = $appsPanel.ClientSize.Width - (Px 2)
+        if ($avail -lt (Px 150)) { return }
 
         $script:LayoutBusy = $true
         try {
             $appsPanel.SuspendLayout()
 
-            $gap  = 8
-            $cols = [Math]::Floor($avail / 330)
+            $gap     = Px 8
+            $colMin  = Px 330
+            $headerH = $FontUIBold.Height + (Px 8)   # faixa do titulo do GroupBox
+
+            $cols = [Math]::Floor($avail / $colMin)
             if ($cols -lt 1) { $cols = 1 }
             if ($cols -gt 4) { $cols = 4 }
 
             $colW  = [Math]::Floor(($avail - ($gap * ($cols - 1))) / $cols)
-            $flowW = $colW - 14
+            $flowW = $colW - (Px 14)
 
             $colY = New-Object 'int[]' $cols
 
@@ -575,12 +741,17 @@ public static extern bool SetProcessDPIAware();
                 }
                 $cat.Group.Visible = $true
 
-                # Deixa o proprio FlowLayoutPanel calcular quantas linhas os chips ocupam
-                # nesta largura, em vez de estimar por divisao.
-                $cat.Flow.Width = $flowW
-                $flowH  = $cat.Flow.GetPreferredSize((New-Object Drawing.Size($flowW, 0))).Height
-                if ($flowH -lt 25) { $flowH = 25 }
-                $groupH = $flowH + 26
+                # Simula a quebra de linha do FlowLayoutPanel com a mesma conta que ele usa
+                # (largura do controle + margem direita), para saber a altura exata.
+                $rows = 1
+                $x    = 0
+                foreach ($chip in $visible) {
+                    $w = $chip.Width + $chip.Margin.Right
+                    if ($x -gt 0 -and ($x + $w) -gt $flowW) { $rows++; $x = 0 }
+                    $x += $w
+                }
+                $flowH  = $rows * ($chipHeight + $chipGap)
+                $groupH = $flowH + $headerH + (Px 6)
 
                 # coluna mais curta (empacotamento tipo masonry)
                 $idx = 0
@@ -590,7 +761,7 @@ public static extern bool SetProcessDPIAware();
 
                 $cat.Group.Location = New-Object Drawing.Point(($idx * ($colW + $gap)), $colY[$idx])
                 $cat.Group.Size     = New-Object Drawing.Size($colW, $groupH)
-                $cat.Flow.Location  = New-Object Drawing.Point(8, 17)
+                $cat.Flow.Location  = New-Object Drawing.Point((Px 8), $headerH)
                 $cat.Flow.Size      = New-Object Drawing.Size($flowW, $flowH)
 
                 $colY[$idx] = $colY[$idx] + $groupH + $gap
@@ -773,7 +944,12 @@ public static extern bool SetProcessDPIAware();
 
         Write-Output ("COMANDO: winget {0}" -f ($wingetArgs -join ' '))
         & $winget @wingetArgs 2>&1 | ForEach-Object { Write-Output "  $_" }
-        Write-Output (Show-WingetResult $LASTEXITCODE $app.Nome)
+        $code = $LASTEXITCODE
+        Write-Output (Show-WingetResult $code $app.Nome)
+        if ($code -ne 0 -and $app.Src -eq 'msstore') {
+            Write-Output "  DICA: pacotes da Microsoft Store dependem da Store instalada e de uma conta Microsoft."
+            Write-Output "  Em Windows LTSC, ou com a Store removida, este item nao instala por aqui."
+        }
 '@)
 
     $chocoBootstrapScript = [scriptblock]::Create($jobPreamble + @'
@@ -799,7 +975,9 @@ public static extern bool SetProcessDPIAware();
         if (Get-Winget) { Write-Output "OK: Winget ja esta instalado."; return }
         $choco = Get-Choco
         if (-not $choco) { Write-Output "ERRO: Chocolatey indisponivel, nao e possivel instalar o Winget."; return }
-        & $choco install microsoft-winget -y --no-progress 2>&1 | ForEach-Object { Write-Output "  $_" }
+        # O pacote correto e 'winget-cli'. O antigo 'microsoft-winget' nao existe no repositorio,
+        # entao este bootstrap nunca funcionou.
+        & $choco install winget-cli -y --no-progress 2>&1 | ForEach-Object { Write-Output "  $_" }
         if ($LASTEXITCODE -eq 0) { Write-Output "OK: Winget instalado com sucesso." }
         else                     { Write-Output "AVISO: instalacao do Winget terminou com codigo $LASTEXITCODE." }
 '@)
@@ -814,6 +992,19 @@ public static extern bool SetProcessDPIAware();
         else                     { Write-Output "AVISO: processo terminou com codigo $LASTEXITCODE." }
 '@)
 
+    # NVIDIA App: painel de controle atual da NVIDIA, sucessor do GeForce Experience.
+    # E complementar ao driver, nao substitui o pacote nvidia-display-driver.
+    $nvidiaAppScript = [scriptblock]::Create($jobPreamble + @'
+
+        Write-Output "--- NVIDIA App (via Chocolatey) ---"
+        $choco = Get-Choco
+        if (-not $choco) { Write-Output "ERRO: Chocolatey nao encontrado."; return }
+        & $choco install nvidia-app -y --no-progress 2>&1 | ForEach-Object { Write-Output "  $_" }
+        if ($LASTEXITCODE -eq 0)        { Write-Output "OK: NVIDIA App instalado/atualizado com sucesso." }
+        elseif ($LASTEXITCODE -eq 3010) { Write-Output "AVISO: instalado, reinicializacao pendente." }
+        else                            { Write-Output "AVISO: processo terminou com codigo $LASTEXITCODE." }
+'@)
+
     $amdChipsetScript = [scriptblock]::Create($jobPreamble + @'
 
         Write-Output "--- Chipset AMD (via Chocolatey) ---"
@@ -824,16 +1015,129 @@ public static extern bool SetProcessDPIAware();
         else                     { Write-Output "AVISO: processo terminou com codigo $LASTEXITCODE." }
 '@)
 
+    # Trocado de winget para Chocolatey: o unico pacote AMD no winget e o
+    # 'AMD.AMDSoftwareCloudEdition', que e a edicao para maquinas virtuais / cloud gaming e
+    # esta parada na versao 23.Q3. Para desktop o correto e o Adrenalin Edition.
     $amdGpuScript = [scriptblock]::Create($jobPreamble + @'
 
-        Write-Output "--- Software AMD GPU (via Winget) ---"
-        $winget = Get-Winget
-        if (-not $winget) { Write-Output "ERRO: Winget nao encontrado nesta maquina."; return }
-        $id = 'AMD.AMDSoftwareCloudEdition'
-        $wingetArgs = @('install','--id',$id,'--exact','--silent','--source','winget',
-                        '--accept-package-agreements','--accept-source-agreements','--disable-interactivity')
-        & $winget @wingetArgs 2>&1 | ForEach-Object { Write-Output "  $_" }
-        Write-Output (Show-WingetResult $LASTEXITCODE 'Software AMD GPU')
+        Write-Output "--- AMD Software: Adrenalin Edition (via Chocolatey) ---"
+        $choco = Get-Choco
+        if (-not $choco) { Write-Output "ERRO: Chocolatey nao encontrado."; return }
+        & $choco install amd-software-adrenalin-edition -y --no-progress 2>&1 | ForEach-Object { Write-Output "  $_" }
+        if ($LASTEXITCODE -eq 0)        { Write-Output "OK: AMD Adrenalin instalado/atualizado com sucesso." }
+        elseif ($LASTEXITCODE -eq 3010) { Write-Output "AVISO: instalado, reinicializacao pendente." }
+        else                            { Write-Output "AVISO: processo terminou com codigo $LASTEXITCODE." }
+'@)
+
+    # Compara o que esta instalado na maquina com o que os repositorios oferecem.
+    # Nao instala nada: so relata e sugere.
+    #
+    # De onde sai cada versao instalada:
+    #   NVIDIA  - Win32_VideoController.DriverVersion, convertido para a versao comercial.
+    #             O Windows reporta algo como 32.0.15.6094; os ultimos 5 digitos (56094)
+    #             correspondem a versao 560.94 divulgada pela NVIDIA.
+    #   Radeon  - DisplayVersion de "AMD Software" no registro de programas instalados.
+    #             A chave HKLM\SOFTWARE\AMD\CN\RadeonSoftwareVersion existe mas costuma vir
+    #             vazia, entao nao serve como fonte.
+    #   Chipset - DisplayVersion de "AMD Chipset Software".
+    $driverCheckScript = [scriptblock]::Create($jobPreamble + @'
+
+        Write-Output "--- Verificacao de drivers instalados ---"
+
+        function Get-ProgramVersion([string]$padrao) {
+            $chaves = @(
+                'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+                'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+            )
+            $item = Get-ItemProperty $chaves -ErrorAction SilentlyContinue |
+                    Where-Object { $_.DisplayName -eq $padrao -and $_.DisplayVersion } |
+                    Select-Object -First 1
+            if ($item) { return $item.DisplayVersion }
+            return $null
+        }
+
+        function Get-ChocoVersion([string]$pacote) {
+            $choco = Get-Choco
+            if (-not $choco) { return $null }
+            $saida = & $choco search $pacote --exact --limit-output --source chocolatey 2>&1 | Out-String
+            $m = [regex]::Match($saida, '(?im)^' + [regex]::Escape($pacote) + '\|(\S+)')
+            if ($m.Success) { return $m.Groups[1].Value }
+            return $null
+        }
+
+        function Compare-Versoes([string]$instalada, [string]$disponivel) {
+            try {
+                $a = [version]($instalada  -replace '[^\d\.]','')
+                $b = [version]($disponivel -replace '[^\d\.]','')
+                if ($b -gt $a) { return 'atualizar' }
+                if ($b -eq $a) { return 'atual' }
+                return 'mais nova que o repositorio'
+            } catch { return 'indeterminado' }
+        }
+
+        $gpus = @(Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue)
+        if ($gpus.Count -eq 0) { Write-Output "AVISO: nenhuma placa de video reportada pelo Windows." }
+        foreach ($g in $gpus) {
+            Write-Output ("Video detectado: {0}" -f $g.Name)
+            Write-Output ("   driver do Windows: {0}   data: {1}" -f $g.DriverVersion, $(if ($g.DriverDate) { ([datetime]$g.DriverDate).ToString('dd/MM/yyyy') } else { 'n/d' }))
+        }
+
+        # ---------------- NVIDIA ----------------
+        $nv = @($gpus | Where-Object { $_.Name -match 'NVIDIA' -or $_.AdapterCompatibility -match 'NVIDIA' })
+        if ($nv.Count -eq 0) {
+            Write-Output "NVIDIA: nenhuma GPU NVIDIA detectada, nada a verificar."
+        } else {
+            $digitos = ($nv[0].DriverVersion -replace '\D','')
+            $atual = $null
+            if ($digitos.Length -ge 5) {
+                $u5 = $digitos.Substring($digitos.Length - 5)
+                $atual = "{0}.{1}" -f $u5.Substring(0,3), $u5.Substring(3,2)
+            }
+            $novo = Get-ChocoVersion 'nvidia-display-driver'
+            Write-Output ("NVIDIA: instalado {0} | repositorio {1}" -f $(if ($atual) { $atual } else { 'indeterminado' }), $(if ($novo) { $novo } else { 'indisponivel' }))
+            if ($atual -and $novo) {
+                switch (Compare-Versoes $atual $novo) {
+                    'atualizar' { Write-Output "   SUGESTAO: ha driver mais novo. Use o botao 'Driver NVIDIA'." }
+                    'atual'     { Write-Output "   OK: driver NVIDIA ja esta na versao do repositorio." }
+                    default     { Write-Output "   OK: driver instalado e igual ou mais novo que o do repositorio." }
+                }
+            }
+        }
+
+        # ---------------- AMD Radeon ----------------
+        $amd = @($gpus | Where-Object { $_.Name -match 'AMD|Radeon' -or $_.AdapterCompatibility -match 'Advanced Micro Devices' })
+        if ($amd.Count -eq 0) {
+            Write-Output "AMD Radeon: nenhuma GPU AMD detectada, nada a verificar."
+        } else {
+            $atual = Get-ProgramVersion 'AMD Software'
+            $novo  = Get-ChocoVersion 'amd-software-adrenalin-edition'
+            Write-Output ("AMD Radeon: instalado {0} | repositorio {1}" -f $(if ($atual) { $atual } else { 'AMD Software nao encontrado' }), $(if ($novo) { $novo } else { 'indisponivel' }))
+            if ($atual -and $novo) {
+                switch (Compare-Versoes $atual $novo) {
+                    'atualizar' { Write-Output "   SUGESTAO: ha versao mais nova. Use o botao 'AMD Adrenalin'." }
+                    'atual'     { Write-Output "   OK: AMD Adrenalin ja esta na versao do repositorio." }
+                    default     { Write-Output "   OK: versao instalada e igual ou mais nova que a do repositorio." }
+                }
+            }
+        }
+
+        # ---------------- Chipset AMD ----------------
+        $cpu = (Get-CimInstance Win32_Processor -ErrorAction SilentlyContinue | Select-Object -First 1).Name
+        if ($cpu -notmatch 'AMD|Ryzen') {
+            Write-Output ("Chipset AMD: processador '{0}' nao e AMD, nada a verificar." -f $cpu)
+        } else {
+            $atual = Get-ProgramVersion 'AMD Chipset Software'
+            $novo  = Get-ChocoVersion 'amd-ryzen-chipset'
+            Write-Output ("Chipset AMD ({0}):" -f $cpu.Trim())
+            Write-Output ("   instalado: {0}" -f $(if ($atual) { $atual } else { 'AMD Chipset Software nao encontrado' }))
+            Write-Output ("   repositorio: {0}" -f $(if ($novo) { $novo } else { 'indisponivel' }))
+            # A versao do pacote choco e uma data (ex.: 2026.7.30) e a do driver e do tipo
+            # 8.07.16.1035: numeracoes diferentes, entao comparar daria um veredito falso.
+            Write-Output "   OBS: as duas numeracoes nao sao comparaveis entre si. Instale pelo botao"
+            Write-Output "   'Chipset AMD' se quiser garantir a versao mais recente publicada."
+        }
+
+        Write-Output "OK: verificacao concluida. Nada foi instalado."
 '@)
 
     $upgradeAllScript = [scriptblock]::Create($jobPreamble + @'
@@ -1024,9 +1328,11 @@ public static extern bool SetProcessDPIAware();
         Start-Queue
     }
 
+    $checkDriversButton.Add_Click({ & $startSingle 'Verificando drivers' $driverCheckScript $true $false })
     $nvidiaButton.Add_Click({     & $startSingle 'Driver NVIDIA'    $nvidiaScript     $true  $false })
+    $nvidiaAppButton.Add_Click({  & $startSingle 'NVIDIA App'       $nvidiaAppScript  $true  $false })
     $amdChipsetButton.Add_Click({ & $startSingle 'Chipset AMD'      $amdChipsetScript $true  $false })
-    $amdGpuButton.Add_Click({     & $startSingle 'Software AMD GPU' $amdGpuScript     $false $true  })
+    $amdGpuButton.Add_Click({     & $startSingle 'AMD Adrenalin'    $amdGpuScript     $true  $false })
     $upgradeButton.Add_Click({
         $resp = [Windows.Forms.MessageBox]::Show(
             "Atualizar todos os programas conhecidos pelo Winget?`n`nIsso pode demorar bastante.",
@@ -1072,7 +1378,8 @@ public static extern bool SetProcessDPIAware();
         # A divisoria e dimensionada pelo conteudo: a selecao recebe apenas a altura que precisa
         # e o log fica com todo o resto (limitado a 62% para nao engolir o log em telas baixas).
         try {
-            $needed = $script:ContentHeight + $toolbar.Height + 14
+            # altura exata: conteudo + barra de ferramentas + padding do painel + folga minima
+            $needed = $script:ContentHeight + $toolbar.Height + $split.Panel1.Padding.Vertical + (Px 6)
             $min    = $split.Panel1MinSize
             $max    = $split.Height - $split.Panel2MinSize - $split.SplitterWidth
             $cap    = [int]($split.Height * 0.62)
