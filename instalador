@@ -40,8 +40,24 @@
       - Botao "NVIDIA App" (sucessor do GeForce Experience), separado do driver puro.
       - NodeJS passou da linha 'current' para a LTS.
 
+    Versao 16.3 - central de drivers:
+      - "Verificar drivers" agora faz uma varredura e abre um modal com a lista de
+        dispositivos, versao atual, versao disponivel e origem, com selecao por item.
+      - Fontes, todas gratuitas e sem cadastro:
+          Windows Update  - API COM Microsoft.Update.Session. Fonte oficial; a mesma API
+                            baixa e instala o driver assinado.
+          pci.ids/usb.ids - bases publicas que traduzem VEN_xxxx/DEV_xxxx em fabricante e
+                            modelo, o que permite identificar "Dispositivo desconhecido".
+          Chocolatey      - video e chipset, que costumam estar mais novos que no WU.
+      - Dispositivos com problema usam filtro -PresentOnly + codigo do gerenciador. So por
+        Status != OK apareciam dezenas de CM_PROB_PHANTOM (hardware ja desconectado).
+      - Botao SDIO: instala o Snappy Driver Installer Origin, alternativa aberta e sem
+        cadastro ao DriverPack. Os pacotes de driver dele ficam a cargo do usuario.
+      - Log e resumo: rolagem uma vez por ciclo (era por linha, e o custo virava quadratico),
+        corte do log preservando o fim, e resumo de sucessos/falhas ao fim da fila.
+
 .VERSION
-    16.2
+    16.3
 #>
 #endregion
 
@@ -54,7 +70,7 @@
 $ScriptUrl = 'https://is.gd/posinstalador'
 
 $AppTitle   = 'Pos Instalador de Aplicativos'
-$AppVersion = '16.2'
+$AppVersion = '16.3'
 
 #region ELEVACAO
 # Forca TLS 1.2 (necessario em instalacoes antigas do Windows para baixar de HTTPS)
@@ -309,6 +325,25 @@ public static extern bool SetProcessDPIAware();
     $script:AllChips    = @()
     $script:LayoutBusy  = $false
     $script:LastWidth   = -1
+
+    # Resultado de cada tarefa, para o resumo exibido no fim da fila.
+    $script:Results          = [System.Collections.Generic.List[object]]::new()
+    $script:TaskHadError     = $false
+    $script:TaskHadWarn      = $false
+    $script:TaskHadOk        = $false
+    $script:TaskFirstProblem = ''
+
+    # Rolagem do log adiada: ver Write-Log e Update-LogScroll.
+    $script:LogScrollPending = $false
+    $script:LogMaxChars      = 400000
+
+    # Tarefas que devolvem dados (e nao apenas texto de log) guardam o resultado aqui, e o
+    # callback OnComplete e disparado depois que a fila para -- nunca de dentro do tick do
+    # timer, senao abrir um modal reentraria no proprio handler.
+    $script:TaskData        = $null
+    $script:PendingComplete = $null
+    $script:PendingData     = $null
+    $script:CurrentTask     = $null
     #endregion
 
     #region JANELA E ESTRUTURA PRINCIPAL
@@ -456,7 +491,7 @@ public static extern bool SetProcessDPIAware();
     $toolsBox.ForeColor = $Theme.Text
     $toolsBox.Padding   = New-Object Windows.Forms.Padding((Px 8), (Px 2), (Px 8), (Px 6))
 
-    $toolsColumns = 7
+    $toolsColumns = 8
     $toolsTable = New-Object Windows.Forms.TableLayoutPanel
     $toolsTable.Dock        = 'Fill'
     $toolsTable.ColumnCount = $toolsColumns
@@ -487,6 +522,7 @@ public static extern bool SetProcessDPIAware();
     $nvidiaAppButton = New-ToolButton 'NVIDIA App'       $Theme.Nvidia ([Drawing.Color]::White)
     $amdGpuButton    = New-ToolButton 'AMD Adrenalin'    $Theme.Amd    ([Drawing.Color]::White)
     $amdChipsetButton= New-ToolButton 'Chipset AMD'      $Theme.Amd    ([Drawing.Color]::White)
+    $sdioButton      = New-ToolButton 'SDIO'             ([Drawing.Color]::FromArgb(88, 28, 135)) ([Drawing.Color]::White)
     $upgradeButton   = New-ToolButton 'Atualizar tudo'   ([Drawing.Color]::FromArgb(51, 65, 85)) ([Drawing.Color]::White)
     $activatorButton = New-ToolButton 'Rodar Ativador'   $Theme.Orange ([Drawing.Color]::White)
 
@@ -495,8 +531,9 @@ public static extern bool SetProcessDPIAware();
     $toolsTable.Controls.Add($nvidiaAppButton,    2, 0)
     $toolsTable.Controls.Add($amdGpuButton,       3, 0)
     $toolsTable.Controls.Add($amdChipsetButton,   4, 0)
-    $toolsTable.Controls.Add($upgradeButton,      5, 0)
-    $toolsTable.Controls.Add($activatorButton,    6, 0)
+    $toolsTable.Controls.Add($sdioButton,         5, 0)
+    $toolsTable.Controls.Add($upgradeButton,      6, 0)
+    $toolsTable.Controls.Add($activatorButton,    7, 0)
     $toolsBox.Controls.Add($toolsTable)
 
     $tipTools = New-Object Windows.Forms.ToolTip
@@ -505,6 +542,7 @@ public static extern bool SetProcessDPIAware();
     $tipTools.SetToolTip($nvidiaAppButton,    'NVIDIA App: painel atual da NVIDIA, sucessor do GeForce Experience')
     $tipTools.SetToolTip($amdGpuButton,       'AMD Software: Adrenalin Edition (video AMD para desktop)')
     $tipTools.SetToolTip($amdChipsetButton,   'Drivers de chipset AMD (AM4 / AM5 / TR4)')
+    $tipTools.SetToolTip($sdioButton,         "Instala o Snappy Driver Installer Origin.`nAlternativa aberta e sem cadastro ao DriverPack.`nOs pacotes de driver dele sao baixados a parte e ocupam varios GB.")
 
     # Fill primeiro (indice 0 e o ultimo a fazer dock), depois as bordas.
     $mainForm.Controls.Add($split)
@@ -793,8 +831,48 @@ public static extern bool SetProcessDPIAware();
         return $false
     }
 
+    # Leva o cursor para o fim e rola ate ele. Custa O(n) sobre o tamanho do log, entao nao
+    # pode ser chamada por linha: o timer chama uma vez por ciclo, depois de drenar o lote.
+    function Update-LogScroll {
+        $script:LogScrollPending = $false
+        if (-not $autoScrollCheck.Checked) { return }
+        $logBox.SelectionStart  = $logBox.TextLength
+        $logBox.SelectionLength = 0
+        $logBox.ScrollToCaret()
+    }
+
+    # Descarta o inicio do log quando ele fica grande demais. Antes isso era um Clear(), que
+    # apagava tudo e levava junto os erros ja registrados no meio de uma instalacao longa.
+    function Limit-LogSize {
+        if ($logBox.TextLength -le $script:LogMaxChars) { return }
+
+        $totalLinhas = $logBox.GetLineFromCharIndex($logBox.TextLength) + 1
+        $descartar   = [int]($totalLinhas * 0.35)
+        if ($descartar -lt 1) { return }
+
+        $corte = $logBox.GetFirstCharIndexFromLine($descartar)
+        if ($corte -le 0) { return }
+
+        # O log e ReadOnly, e nesse estado atribuir '' a SelectedText nao remove nada -- a
+        # insercao de texto funciona, a remocao e ignorada em silencio. Sem desligar o ReadOnly
+        # aqui, o corte falha sem erro nenhum e o log cresce sem limite.
+        $readOnlyAntes = $logBox.ReadOnly
+        $logBox.ReadOnly = $false
+        try {
+            $logBox.Select(0, $corte)
+            $logBox.SelectedText = ''
+
+            # Marca no topo, onde as linhas realmente foram removidas.
+            $logBox.Select(0, 0)
+            $logBox.SelectionColor = $Theme.LogDim
+            $logBox.SelectedText   = "[... $descartar linhas antigas descartadas para manter o desempenho ...]`n"
+        } finally {
+            $logBox.ReadOnly = $readOnlyAntes
+        }
+    }
+
     function Write-Log {
-        param([string]$Text, [string]$Level = 'auto')
+        param([string]$Text, [string]$Level = 'auto', [switch]$Deferred)
 
         if ($null -eq $Text) { return }
 
@@ -814,12 +892,7 @@ public static extern bool SetProcessDPIAware();
             default { $Theme.LogFg }
         }
 
-        # evita degradacao de performance em instalacoes muito longas
-        if ($logBox.TextLength -gt 400000) {
-            $logBox.Clear()
-            $logBox.SelectionColor = $Theme.LogDim
-            $logBox.AppendText("[log truncado para manter o desempenho]`n")
-        }
+        Limit-LogSize
 
         $logBox.SelectionStart  = $logBox.TextLength
         $logBox.SelectionLength = 0
@@ -829,9 +902,13 @@ public static extern bool SetProcessDPIAware();
         $logBox.AppendText("$Text`n")
         $logBox.SelectionColor  = $Theme.LogFg
 
-        if ($autoScrollCheck.Checked) {
-            $logBox.SelectionStart = $logBox.TextLength
-            $logBox.ScrollToCaret()
+        # -Deferred: usado quando o timer esta despejando um lote de saida. Rolar a cada linha
+        # custa O(n) e o total vira quadratico -- medido em 1,45 ms/linha com 200 linhas no log
+        # e 4,78 ms/linha com 1200, o que congelava a janela em instalacoes grandes.
+        if ($Deferred) {
+            $script:LogScrollPending = $true
+        } elseif ($autoScrollCheck.Checked) {
+            Update-LogScroll
         }
     }
 
@@ -858,9 +935,227 @@ public static extern bool SetProcessDPIAware();
         } catch { }
     }
 
+    # Escreve no log um lote de saida vindo do job e, de passagem, classifica o resultado da
+    # tarefa. As proprias mensagens ja seguem o padrao ERRO / AVISO / OK, entao servem de
+    # veredito sem precisar de canal separado.
+    function Write-JobOutput {
+        param($Output)
+        foreach ($item in $Output) {
+            # Uma tarefa pode devolver um objeto de dados no lugar de texto: ele e guardado
+            # para o OnComplete em vez de ir parar no log.
+            if ($null -ne $item -and $item.PSObject.Properties.Name -contains '__Data') {
+                $script:TaskData = $item
+                continue
+            }
+            foreach ($line in ([string]$item -split "`r?`n")) {
+                $clean = $line.TrimEnd()
+                if (Test-LogNoise $clean) { continue }
+
+                if     ($clean -match '^\s*ERRO')  { $script:TaskHadError = $true }
+                elseif ($clean -match '^\s*AVISO') { $script:TaskHadWarn  = $true }
+                elseif ($clean -match '^\s*OK:')   { $script:TaskHadOk    = $true }
+
+                if (-not $script:TaskFirstProblem -and $clean -match '^\s*(ERRO|AVISO)') {
+                    $script:TaskFirstProblem = $clean.Trim()
+                }
+
+                Write-Log $clean -Deferred
+            }
+        }
+    }
+
+    function Save-TaskResult {
+        $status = if     ($script:TaskHadError) { 'ERRO'  }
+                  elseif ($script:TaskHadWarn)  { 'AVISO' }
+                  elseif ($script:TaskHadOk)    { 'OK'    }
+                  else                          { 'OK'    }
+        $script:Results.Add([pscustomobject]@{
+            Nome    = $script:JobName
+            Status  = $status
+            Detalhe = $script:TaskFirstProblem
+        })
+    }
+
+    function Write-Summary {
+        if ($script:Results.Count -eq 0) { return }
+
+        $ok   = @($script:Results | Where-Object { $_.Status -eq 'OK'    })
+        $warn = @($script:Results | Where-Object { $_.Status -eq 'AVISO' })
+        $erro = @($script:Results | Where-Object { $_.Status -eq 'ERRO'  })
+
+        Write-Log '=== Resumo ===' 'head'
+        $linha = '{0} sem erro | {1} com aviso | {2} com falha  (de {3} tarefas)' -f
+                 $ok.Count, $warn.Count, $erro.Count, $script:Results.Count
+        Write-Log $linha $(if ($erro.Count) { 'error' } elseif ($warn.Count) { 'warn' } else { 'ok' })
+
+        foreach ($r in $erro) { Write-Log ("  FALHOU  {0}{1}" -f $r.Nome, $(if ($r.Detalhe) { "  ->  $($r.Detalhe)" } else { '' })) 'error' }
+        foreach ($r in $warn) { Write-Log ("  AVISO   {0}{1}" -f $r.Nome, $(if ($r.Detalhe) { "  ->  $($r.Detalhe)" } else { '' })) 'warn'  }
+
+        return $linha
+    }
+
+    # Modal com o resultado da varredura de drivers. Devolve o plano de instalacao escolhido
+    # ($null se o usuario fechou sem instalar).
+    function Show-DriverModal {
+        param($Itens)
+
+        $dlg = New-Object Windows.Forms.Form
+        $dlg.Text            = 'Drivers encontrados'
+        $dlg.StartPosition   = 'CenterParent'
+        $dlg.FormBorderStyle = 'Sizable'
+        $dlg.MinimizeBox     = $false
+        $dlg.MaximizeBox     = $true
+        $dlg.AutoScaleMode   = 'None'
+        $dlg.Font            = $FontUI
+        $dlg.BackColor       = $Theme.Bg
+        $dlg.ClientSize      = New-Object Drawing.Size((Px 900), (Px 460))
+        $dlg.MinimumSize     = New-Object Drawing.Size((Px 640), (Px 360))
+
+        $rodape = New-Object Windows.Forms.Panel
+        $rodape.Dock    = 'Bottom'
+        $rodape.Height  = Px 52
+        $rodape.Padding = New-Object Windows.Forms.Padding((Px 10), (Px 8), (Px 10), (Px 10))
+
+        $topo = New-Object Windows.Forms.Panel
+        $topo.Dock    = 'Top'
+        $topo.Height  = $FontUI.Height + (Px 14)
+        $topo.Padding = New-Object Windows.Forms.Padding((Px 10), (Px 6), (Px 10), 0)
+
+        $resumoLabel = New-Object Windows.Forms.Label
+        $resumoLabel.Dock      = 'Fill'
+        $resumoLabel.TextAlign = 'MiddleLeft'
+        $resumoLabel.ForeColor = $Theme.Text
+        $topo.Controls.Add($resumoLabel)
+
+        $lista = New-Object Windows.Forms.ListView
+        $lista.Dock          = 'Fill'
+        $lista.View          = 'Details'
+        $lista.CheckBoxes    = $true
+        $lista.FullRowSelect = $true
+        $lista.GridLines     = $true
+        $lista.HideSelection = $false
+        $lista.Font          = $FontUI
+        [void]$lista.Columns.Add('Dispositivo',      (Px 300))
+        [void]$lista.Columns.Add('Classe',           (Px 110))
+        [void]$lista.Columns.Add('Versao atual',     (Px 150))
+        [void]$lista.Columns.Add('Versao disponivel',(Px 150))
+        [void]$lista.Columns.Add('Origem',           (Px 150))
+
+        $instalaveis = 0
+        foreach ($it in $Itens) {
+            $li = New-Object Windows.Forms.ListViewItem($it.Dispositivo)
+            [void]$li.SubItems.Add([string]$it.Classe)
+            [void]$li.SubItems.Add([string]$it.Atual)
+            [void]$li.SubItems.Add([string]$it.Disponivel)
+            [void]$li.SubItems.Add([string]$it.Origem)
+            $li.Tag = $it
+
+            if ($it.Tipo -eq 'problema') {
+                # Nao ha o que instalar direto: o caminho e procurar no catalogo.
+                $li.ForeColor = $Theme.Red
+            } else {
+                $instalaveis++
+                $li.Checked = ($it.Origem -ne 'Chocolatey (opcional)')
+            }
+            [void]$lista.Items.Add($li)
+        }
+
+        $comProblema = @($Itens | Where-Object { $_.Tipo -eq 'problema' }).Count
+        $resumoLabel.Text = '{0} item(ns): {1} instalavel(is), {2} dispositivo(s) com problema. Em vermelho, use "Procurar no catalogo".' -f
+                            @($Itens).Count, $instalaveis, $comProblema
+
+        function New-DlgButton {
+            param([string]$Texto, $Fundo, $Frente)
+            $b = New-Object Windows.Forms.Button
+            $b.Text      = $Texto
+            $b.Dock      = 'Right'
+            $b.Font      = $FontUI
+            $b.Width     = (Get-TextWidth $Texto $FontUI) + (Px 30)
+            $b.FlatStyle = 'Flat'
+            $b.BackColor = $Fundo
+            $b.ForeColor = $Frente
+            $b.Cursor    = 'Hand'
+            $b.FlatAppearance.BorderSize = 0
+            Set-Rounded $b
+            return $b
+        }
+        function New-DlgGap { $g = New-Object Windows.Forms.Panel; $g.Dock = 'Right'; $g.Width = Px 10; return $g }
+
+        $btnFechar   = New-DlgButton 'Fechar'               $Theme.PanelBg $Theme.Text
+        $btnCatalogo = New-DlgButton 'Procurar no catalogo' $Theme.PanelBg $Theme.Text
+        $btnCopiar   = New-DlgButton 'Copiar lista'         $Theme.PanelBg $Theme.Text
+        $btnInstalar = New-DlgButton 'Instalar marcados'    $Theme.Green   ([Drawing.Color]::White)
+        foreach ($b in @($btnFechar, $btnCatalogo, $btnCopiar)) { $b.FlatAppearance.BorderColor = $Theme.Border }
+
+        # Docked a direita: o ultimo adicionado fica mais a direita.
+        $rodape.Controls.Add((New-DlgGap))
+        $rodape.Controls.Add($btnCopiar)
+        $rodape.Controls.Add((New-DlgGap))
+        $rodape.Controls.Add($btnCatalogo)
+        $rodape.Controls.Add((New-DlgGap))
+        $rodape.Controls.Add($btnFechar)
+        $rodape.Controls.Add((New-DlgGap))
+        $rodape.Controls.Add($btnInstalar)
+
+        $dlg.Controls.Add($lista)
+        $dlg.Controls.Add($topo)
+        $dlg.Controls.Add($rodape)
+
+        $script:ModalPlano = $null
+
+        $btnInstalar.Add_Click({
+            $marcados = @($lista.CheckedItems | ForEach-Object { $_.Tag } | Where-Object { $_.Tipo -ne 'problema' })
+            if ($marcados.Count -eq 0) {
+                [Windows.Forms.MessageBox]::Show('Nenhum item instalavel marcado.', 'Aviso', 'OK', 'Warning') | Out-Null
+                return
+            }
+            $msg = "Instalar {0} driver(es) agora?`n`nDriver e mais dificil de desfazer que um aplicativo, e pode exigir reinicializacao." -f $marcados.Count
+            if ([Windows.Forms.MessageBox]::Show($msg, 'Confirmar', 'YesNo', 'Warning') -ne 'Yes') { return }
+
+            $script:ModalPlano = [pscustomobject]@{
+                UpdateIDs = @($marcados | Where-Object { $_.Tipo -eq 'wu'    } | ForEach-Object { $_.UpdateID })
+                Pacotes   = @($marcados | Where-Object { $_.Tipo -eq 'choco' } | ForEach-Object { $_.Pacote   })
+                Total     = $marcados.Count
+            }
+            $dlg.Close()
+        })
+
+        $btnCatalogo.Add_Click({
+            $sel = @($lista.SelectedItems)
+            if ($sel.Count -eq 0) {
+                [Windows.Forms.MessageBox]::Show('Selecione uma linha da lista primeiro.', 'Aviso', 'OK', 'Information') | Out-Null
+                return
+            }
+            $alvo = $sel[0].Tag
+            $termo = if ($alvo.HardwareID) { $alvo.HardwareID } else { $alvo.Dispositivo }
+            $url = 'https://www.catalog.update.microsoft.com/Search.aspx?q=' + [uri]::EscapeDataString($termo)
+            try { Start-Process $url } catch {
+                [Windows.Forms.MessageBox]::Show("Nao foi possivel abrir o navegador.`n`n$url", 'Aviso', 'OK', 'Warning') | Out-Null
+            }
+        })
+
+        $btnCopiar.Add_Click({
+            $texto = ($Itens | ForEach-Object {
+                '{0} | {1} | atual: {2} | disponivel: {3} | {4}' -f $_.Dispositivo, $_.Classe, $_.Atual, $_.Disponivel, $_.Origem
+            }) -join "`r`n"
+            if ($texto) { [Windows.Forms.Clipboard]::SetText($texto) }
+        })
+
+        $btnFechar.Add_Click({ $dlg.Close() })
+
+        [void]$dlg.ShowDialog($mainForm)
+        $dlg.Dispose()
+        return $script:ModalPlano
+    }
+
     function Add-Task {
-        param([string]$Name, [scriptblock]$Script, $Arguments = @())
-        $script:Queue.Enqueue([pscustomobject]@{ Name = $Name; Script = $Script; Arguments = @($Arguments) })
+        param([string]$Name, [scriptblock]$Script, $Arguments = @(), [scriptblock]$OnComplete = $null)
+        $script:Queue.Enqueue([pscustomobject]@{
+            Name       = $Name
+            Script     = $Script
+            Arguments  = @($Arguments)
+            OnComplete = $OnComplete
+        })
     }
 
     function Start-Queue {
@@ -868,6 +1163,7 @@ public static extern bool SetProcessDPIAware();
         $script:TotalTasks = $script:Queue.Count
         $script:DoneTasks  = 0
         $script:Cancelling = $false
+        $script:Results.Clear()
         $progressBar.Maximum = $script:TotalTasks
         $progressBar.Value   = 0
         Set-UiBusy $true
@@ -882,8 +1178,21 @@ public static extern bool SetProcessDPIAware();
         $script:Job = $null
         $progressBar.Value = $progressBar.Maximum
         Set-UiBusy $false
-        $statusLabel.Text = $Reason
         Write-Log "=== $Reason ===" 'head'
+
+        # O resumo tambem sai quando a execucao e cancelada: o parcial ainda interessa.
+        $resumo = Write-Summary
+        $statusLabel.Text = if ($resumo) { "$Reason  $resumo" } else { $Reason }
+
+        Update-LogScroll
+
+        # Callback so agora, com o timer ja parado. Se ele abrir um modal, a janela modal
+        # bombeia mensagens e um timer ativo reentraria no tick.
+        $callback = $script:PendingComplete
+        $dados    = $script:PendingData
+        $script:PendingComplete = $null
+        $script:PendingData     = $null
+        if ($callback) { & $callback $dados }
     }
     #endregion
 
@@ -1029,21 +1338,171 @@ public static extern bool SetProcessDPIAware();
         else                            { Write-Output "AVISO: processo terminou com codigo $LASTEXITCODE." }
 '@)
 
-    # Compara o que esta instalado na maquina com o que os repositorios oferecem.
-    # Nao instala nada: so relata e sugere.
+    # --------------------------------------------------------------------------------------
+    # Varredura completa de drivers. Devolve texto de progresso para o log e, no fim, um
+    # objeto com a lista de itens, consumido pelo modal.
     #
-    # De onde sai cada versao instalada:
-    #   NVIDIA  - Win32_VideoController.DriverVersion, convertido para a versao comercial.
-    #             O Windows reporta algo como 32.0.15.6094; os ultimos 5 digitos (56094)
-    #             correspondem a versao 560.94 divulgada pela NVIDIA.
-    #   Radeon  - DisplayVersion de "AMD Software" no registro de programas instalados.
-    #             A chave HKLM\SOFTWARE\AMD\CN\RadeonSoftwareVersion existe mas costuma vir
-    #             vazia, entao nao serve como fonte.
-    #   Chipset - DisplayVersion de "AMD Chipset Software".
-    $driverCheckScript = [scriptblock]::Create($jobPreamble + @'
+    # Fontes, todas gratuitas e sem cadastro:
+    #   Windows Update - API COM Microsoft.Update.Session. E a fonte oficial, entrega driver
+    #                    assinado e a mesma API baixa e instala.
+    #   pci.ids/usb.ids - bases publicas que traduzem VEN_xxxx/DEV_xxxx em nome de fabricante
+    #                    e modelo. E o que permite identificar "Dispositivo desconhecido".
+    #   Chocolatey     - pacotes de video/chipset, que costumam ser mais novos que o do WU.
+    # --------------------------------------------------------------------------------------
+    $driverScanScript = [scriptblock]::Create($jobPreamble + @'
 
-        Write-Output "--- Verificacao de drivers instalados ---"
+        Write-Output "--- Varredura de drivers ---"
+        $itens = New-Object System.Collections.Generic.List[object]
 
+        # ---------- base publica de nomes (baixada so quando ha o que identificar) ----------
+        function Get-IdsFile([string]$Url, [string]$Nome) {
+            $caminho = Join-Path $env:TEMP $Nome
+            $baixar = $true
+            if (Test-Path $caminho) {
+                if (((Get-Date) - (Get-Item $caminho).LastWriteTime).TotalDays -lt 30) { $baixar = $false }
+            }
+            if ($baixar) {
+                try {
+                    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+                    Invoke-WebRequest $Url -OutFile $caminho -UseBasicParsing -TimeoutSec 60
+                } catch {
+                    Write-Output "AVISO: nao foi possivel baixar $Nome. $($_.Exception.Message)"
+                }
+            }
+            if (Test-Path $caminho) { return $caminho }
+            return $null
+        }
+
+        # O formato dos dois arquivos e o mesmo: fabricante na coluna 0, dispositivo indentado.
+        function Read-IdsFile([string]$Caminho) {
+            $fab = @{}; $dev = @{}
+            if (-not $Caminho) { return @{ Fab = $fab; Dev = $dev } }
+            $atual = $null
+            foreach ($l in [IO.File]::ReadLines($Caminho)) {
+                if ($l.Length -eq 0 -or $l.StartsWith('#')) { continue }
+                if ($l[0] -ne "`t") {
+                    $p = $l -split '\s+', 2
+                    if ($p.Count -eq 2) { $atual = $p[0].ToUpper(); $fab[$atual] = $p[1].Trim() }
+                } elseif ($l.Length -gt 1 -and $l[1] -ne "`t" -and $atual) {
+                    $p = $l.TrimStart("`t") -split '\s+', 2
+                    if ($p.Count -eq 2) { $dev["$atual`:$($p[0].ToUpper())"] = $p[1].Trim() }
+                }
+            }
+            return @{ Fab = $fab; Dev = $dev }
+        }
+
+        # ---------- 1. dispositivos com problema real ----------
+        # CM_PROB_PHANTOM marca hardware ja desconectado. Filtrar so por Status != OK traz
+        # dezenas desses fantasmas; por isso o filtro usa -PresentOnly com o codigo do erro.
+        $codigos = @{
+            1  = 'nao configurado corretamente'
+            10 = 'nao pode iniciar'
+            18 = 'precisa reinstalar os drivers'
+            19 = 'registro corrompido'
+            24 = 'ausente ou com falha'
+            28 = 'sem driver instalado'
+            31 = 'o Windows nao carregou o driver'
+            37 = 'falha ao inicializar o driver'
+            39 = 'driver corrompido ou ausente'
+            43 = 'parado por reportar problema'
+            45 = 'desconectado'
+        }
+        $problemas = @(Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue |
+                       Where-Object { $codigos.ContainsKey([int]$_.ConfigManagerErrorCode) })
+        Write-Output ("Dispositivos presentes com problema: {0}" -f $problemas.Count)
+
+        if ($problemas.Count -gt 0) {
+            Write-Output "Baixando as bases publicas de identificacao (pci.ids / usb.ids)..."
+            $pci = Read-IdsFile (Get-IdsFile 'https://pci-ids.ucw.cz/v2.2/pci.ids' 'posinstalador-pci.ids')
+            $usb = Read-IdsFile (Get-IdsFile 'http://www.linux-usb.org/usb.ids'    'posinstalador-usb.ids')
+            Write-Output ("Base carregada: {0} fabricantes PCI, {1} fabricantes USB." -f $pci.Fab.Count, $usb.Fab.Count)
+        }
+
+        foreach ($d in $problemas) {
+            $id = $d.InstanceId
+            $nome = $d.FriendlyName
+            $hw   = ''
+
+            $mp = [regex]::Match($id, 'VEN_([0-9A-F]{4})&DEV_([0-9A-F]{4})', 'IgnoreCase')
+            $mu = [regex]::Match($id, 'VID_([0-9A-F]{4})&PID_([0-9A-F]{4})', 'IgnoreCase')
+            if ($mp.Success) {
+                $v = $mp.Groups[1].Value.ToUpper(); $t = $mp.Groups[2].Value.ToUpper()
+                $hw = "PCI\VEN_$v&DEV_$t"
+                $nf = $pci.Fab[$v]; $nd = $pci.Dev["$v`:$t"]
+                if ($nf -or $nd) { $nome = (@($nf, $nd) | Where-Object { $_ }) -join ' ' }
+            } elseif ($mu.Success) {
+                $v = $mu.Groups[1].Value.ToUpper(); $t = $mu.Groups[2].Value.ToUpper()
+                $hw = "USB\VID_$v&PID_$t"
+                $nf = $usb.Fab[$v]; $nd = $usb.Dev["$v`:$t"]
+                if ($nf -or $nd) { $nome = (@($nf, $nd) | Where-Object { $_ }) -join ' ' }
+            }
+            if (-not $nome) { $nome = '(dispositivo nao identificado)' }
+
+            $motivo = $codigos[[int]$d.ConfigManagerErrorCode]
+            Write-Output ("  PROBLEMA: {0} -- {1}" -f $nome, $motivo)
+
+            $itens.Add([pscustomobject]@{
+                Tipo        = 'problema'
+                Dispositivo = $nome
+                Classe      = $(if ($d.Class) { $d.Class } else { 'desconhecida' })
+                Atual       = $motivo
+                Disponivel  = 'procurar no catalogo'
+                Origem      = 'Catalogo Microsoft'
+                UpdateID    = ''
+                Pacote      = ''
+                HardwareID  = $hw
+                Detalhe     = $id
+            })
+        }
+
+        # ---------- 2. atualizacoes oferecidas pelo Windows Update ----------
+        Write-Output "Consultando o Windows Update (pode levar alguns segundos)..."
+        try {
+            $sessao = New-Object -ComObject Microsoft.Update.Session
+            $busca  = $sessao.CreateUpdateSearcher()
+            $res    = $busca.Search("IsInstalled=0 and Type='Driver'")
+            Write-Output ("Windows Update ofereceu {0} driver(es)." -f $res.Updates.Count)
+
+            $presentes = @(Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue)
+
+            for ($i = 0; $i -lt $res.Updates.Count; $i++) {
+                $u = $res.Updates.Item($i)
+
+                # DriverVerVersion costuma vir vazio; nesses casos a versao esta no titulo.
+                $ver = $u.DriverVerVersion
+                if (-not $ver) {
+                    $mv = [regex]::Match($u.Title, '(\d+(?:\.\d+){1,3})\s*$')
+                    if ($mv.Success) { $ver = $mv.Groups[1].Value }
+                }
+
+                $modelo = $(if ($u.DriverModel) { $u.DriverModel } else { $u.Title })
+                $atual  = ''
+                $alvo = $presentes | Where-Object { $_.FriendlyName -eq $modelo } | Select-Object -First 1
+                if ($alvo) {
+                    $pv = (Get-PnpDeviceProperty -InstanceId $alvo.InstanceId -KeyName 'DEVPKEY_Device_DriverVersion' -ErrorAction SilentlyContinue).Data
+                    if ($pv) { $atual = [string]$pv }
+                }
+
+                Write-Output ("  ATUALIZACAO: {0} -> {1}" -f $modelo, $(if ($ver) { $ver } else { 'versao no titulo' }))
+
+                $itens.Add([pscustomobject]@{
+                    Tipo        = 'wu'
+                    Dispositivo = $modelo
+                    Classe      = $(if ($u.DriverClass) { $u.DriverClass } else { '' })
+                    Atual       = $atual
+                    Disponivel  = $ver
+                    Origem      = 'Windows Update'
+                    UpdateID    = $u.Identity.UpdateID
+                    Pacote      = ''
+                    HardwareID  = ''
+                    Detalhe     = $u.Title
+                })
+            }
+        } catch {
+            Write-Output "AVISO: nao foi possivel consultar o Windows Update. $($_.Exception.Message)"
+        }
+
+        # ---------- 3. video e chipset via Chocolatey ----------
         function Get-ProgramVersion([string]$padrao) {
             $chaves = @(
                 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
@@ -1055,7 +1514,6 @@ public static extern bool SetProcessDPIAware();
             if ($item) { return $item.DisplayVersion }
             return $null
         }
-
         function Get-ChocoVersion([string]$pacote) {
             $choco = Get-Choco
             if (-not $choco) { return $null }
@@ -1064,80 +1522,151 @@ public static extern bool SetProcessDPIAware();
             if ($m.Success) { return $m.Groups[1].Value }
             return $null
         }
-
-        function Compare-Versoes([string]$instalada, [string]$disponivel) {
+        function Test-Desatualizado([string]$instalada, [string]$disponivel) {
             try {
                 $a = [version]($instalada  -replace '[^\d\.]','')
                 $b = [version]($disponivel -replace '[^\d\.]','')
-                if ($b -gt $a) { return 'atualizar' }
-                if ($b -eq $a) { return 'atual' }
-                return 'mais nova que o repositorio'
-            } catch { return 'indeterminado' }
+                return ($b -gt $a)
+            } catch { return $false }
         }
 
         $gpus = @(Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue)
-        if ($gpus.Count -eq 0) { Write-Output "AVISO: nenhuma placa de video reportada pelo Windows." }
-        foreach ($g in $gpus) {
-            Write-Output ("Video detectado: {0}" -f $g.Name)
-            Write-Output ("   driver do Windows: {0}   data: {1}" -f $g.DriverVersion, $(if ($g.DriverDate) { ([datetime]$g.DriverDate).ToString('dd/MM/yyyy') } else { 'n/d' }))
-        }
+        foreach ($g in $gpus) { Write-Output ("Video detectado: {0} (driver {1})" -f $g.Name, $g.DriverVersion) }
 
-        # ---------------- NVIDIA ----------------
         $nv = @($gpus | Where-Object { $_.Name -match 'NVIDIA' -or $_.AdapterCompatibility -match 'NVIDIA' })
-        if ($nv.Count -eq 0) {
-            Write-Output "NVIDIA: nenhuma GPU NVIDIA detectada, nada a verificar."
-        } else {
-            $digitos = ($nv[0].DriverVersion -replace '\D','')
-            $atual = $null
-            if ($digitos.Length -ge 5) {
-                $u5 = $digitos.Substring($digitos.Length - 5)
+        if ($nv.Count -gt 0) {
+            # O Windows reporta 32.0.15.6094; os ultimos 5 digitos (56094) sao a versao 560.94.
+            $dig = ($nv[0].DriverVersion -replace '\D','')
+            $atual = ''
+            if ($dig.Length -ge 5) {
+                $u5 = $dig.Substring($dig.Length - 5)
                 $atual = "{0}.{1}" -f $u5.Substring(0,3), $u5.Substring(3,2)
             }
             $novo = Get-ChocoVersion 'nvidia-display-driver'
-            Write-Output ("NVIDIA: instalado {0} | repositorio {1}" -f $(if ($atual) { $atual } else { 'indeterminado' }), $(if ($novo) { $novo } else { 'indisponivel' }))
-            if ($atual -and $novo) {
-                switch (Compare-Versoes $atual $novo) {
-                    'atualizar' { Write-Output "   SUGESTAO: ha driver mais novo. Use o botao 'Driver NVIDIA'." }
-                    'atual'     { Write-Output "   OK: driver NVIDIA ja esta na versao do repositorio." }
-                    default     { Write-Output "   OK: driver instalado e igual ou mais novo que o do repositorio." }
-                }
+            if ($atual -and $novo -and (Test-Desatualizado $atual $novo)) {
+                Write-Output ("  ATUALIZACAO: driver NVIDIA {0} -> {1}" -f $atual, $novo)
+                $itens.Add([pscustomobject]@{
+                    Tipo='choco'; Dispositivo=$nv[0].Name; Classe='Video'; Atual=$atual; Disponivel=$novo
+                    Origem='Chocolatey'; UpdateID=''; Pacote='nvidia-display-driver'; HardwareID=''; Detalhe='nvidia-display-driver'
+                })
+            } else {
+                Write-Output ("  NVIDIA: instalado {0} | repositorio {1} -- nada a fazer." -f $atual, $novo)
             }
         }
 
-        # ---------------- AMD Radeon ----------------
         $amd = @($gpus | Where-Object { $_.Name -match 'AMD|Radeon' -or $_.AdapterCompatibility -match 'Advanced Micro Devices' })
-        if ($amd.Count -eq 0) {
-            Write-Output "AMD Radeon: nenhuma GPU AMD detectada, nada a verificar."
-        } else {
+        if ($amd.Count -gt 0) {
             $atual = Get-ProgramVersion 'AMD Software'
             $novo  = Get-ChocoVersion 'amd-software-adrenalin-edition'
-            Write-Output ("AMD Radeon: instalado {0} | repositorio {1}" -f $(if ($atual) { $atual } else { 'AMD Software nao encontrado' }), $(if ($novo) { $novo } else { 'indisponivel' }))
-            if ($atual -and $novo) {
-                switch (Compare-Versoes $atual $novo) {
-                    'atualizar' { Write-Output "   SUGESTAO: ha versao mais nova. Use o botao 'AMD Adrenalin'." }
-                    'atual'     { Write-Output "   OK: AMD Adrenalin ja esta na versao do repositorio." }
-                    default     { Write-Output "   OK: versao instalada e igual ou mais nova que a do repositorio." }
-                }
+            if ($atual -and $novo -and (Test-Desatualizado $atual $novo)) {
+                Write-Output ("  ATUALIZACAO: AMD Adrenalin {0} -> {1}" -f $atual, $novo)
+                $itens.Add([pscustomobject]@{
+                    Tipo='choco'; Dispositivo=$amd[0].Name; Classe='Video'; Atual=$atual; Disponivel=$novo
+                    Origem='Chocolatey'; UpdateID=''; Pacote='amd-software-adrenalin-edition'; HardwareID=''; Detalhe='amd-software-adrenalin-edition'
+                })
+            } else {
+                Write-Output ("  AMD Radeon: instalado {0} | repositorio {1} -- nada a fazer." -f $atual, $novo)
             }
         }
 
-        # ---------------- Chipset AMD ----------------
         $cpu = (Get-CimInstance Win32_Processor -ErrorAction SilentlyContinue | Select-Object -First 1).Name
-        if ($cpu -notmatch 'AMD|Ryzen') {
-            Write-Output ("Chipset AMD: processador '{0}' nao e AMD, nada a verificar." -f $cpu)
-        } else {
+        if ($cpu -match 'AMD|Ryzen') {
             $atual = Get-ProgramVersion 'AMD Chipset Software'
             $novo  = Get-ChocoVersion 'amd-ryzen-chipset'
-            Write-Output ("Chipset AMD ({0}):" -f $cpu.Trim())
-            Write-Output ("   instalado: {0}" -f $(if ($atual) { $atual } else { 'AMD Chipset Software nao encontrado' }))
-            Write-Output ("   repositorio: {0}" -f $(if ($novo) { $novo } else { 'indisponivel' }))
-            # A versao do pacote choco e uma data (ex.: 2026.7.30) e a do driver e do tipo
-            # 8.07.16.1035: numeracoes diferentes, entao comparar daria um veredito falso.
-            Write-Output "   OBS: as duas numeracoes nao sao comparaveis entre si. Instale pelo botao"
-            Write-Output "   'Chipset AMD' se quiser garantir a versao mais recente publicada."
+            # A versao do pacote e uma data (2026.7.30) e a do driver e 8.07.16.1035: escalas
+            # diferentes, entao aqui nao se emite veredito -- o item so aparece como opcional.
+            Write-Output ("  Chipset AMD: instalado {0} | pacote {1} (numeracoes nao comparaveis)" -f $atual, $novo)
+            $itens.Add([pscustomobject]@{
+                Tipo='choco'; Dispositivo=('Chipset AMD - ' + $cpu.Trim()); Classe='Chipset'
+                Atual=$(if ($atual) { $atual } else { 'nao encontrado' }); Disponivel=("pacote $novo")
+                Origem='Chocolatey (opcional)'; UpdateID=''; Pacote='amd-ryzen-chipset'; HardwareID=''; Detalhe='amd-ryzen-chipset'
+            })
         }
 
-        Write-Output "OK: verificacao concluida. Nada foi instalado."
+        Write-Output ("OK: varredura concluida com {0} item(ns). Nada foi instalado." -f $itens.Count)
+        Write-Output ([pscustomobject]@{ __Data = $true; Itens = $itens.ToArray() })
+'@)
+
+    # Instala o que foi marcado no modal: atualizacoes do Windows Update por UpdateID e
+    # pacotes do Chocolatey por nome.
+    $driverInstallScript = [scriptblock]::Create("param(`$plano)`n" + $jobPreamble + @'
+
+        Write-Output "--- Instalando drivers selecionados ---"
+
+        $ids = @($plano.UpdateIDs | Where-Object { $_ })
+        if ($ids.Count -gt 0) {
+            try {
+                Write-Output ("Windows Update: {0} item(ns) selecionado(s)." -f $ids.Count)
+                $sessao = New-Object -ComObject Microsoft.Update.Session
+                $busca  = $sessao.CreateUpdateSearcher()
+                $res    = $busca.Search("IsInstalled=0 and Type='Driver'")
+
+                # As atualizacoes nao atravessam a fronteira do job, entao a busca e refeita
+                # aqui e os itens sao reencontrados pelo UpdateID capturado na varredura.
+                $col = New-Object -ComObject Microsoft.Update.UpdateColl
+                for ($i = 0; $i -lt $res.Updates.Count; $i++) {
+                    $u = $res.Updates.Item($i)
+                    if ($ids -contains $u.Identity.UpdateID) {
+                        if (-not $u.EulaAccepted) { $u.AcceptEula() }
+                        [void]$col.Add($u)
+                        Write-Output ("  selecionado: {0}" -f $u.Title)
+                    }
+                }
+
+                if ($col.Count -eq 0) {
+                    Write-Output "AVISO: os itens escolhidos nao estao mais sendo oferecidos pelo Windows Update."
+                } else {
+                    Write-Output "Baixando..."
+                    $dl = $sessao.CreateUpdateDownloader()
+                    $dl.Updates = $col
+                    $rd = $dl.Download()
+                    Write-Output ("  download terminou com codigo {0}" -f $rd.ResultCode)
+
+                    Write-Output "Instalando..."
+                    $inst = $sessao.CreateUpdateInstaller()
+                    $inst.Updates = $col
+                    $ri = $inst.Install()
+                    switch ($ri.ResultCode) {
+                        2 { Write-Output "OK: drivers do Windows Update instalados com sucesso." }
+                        3 { Write-Output "AVISO: instalado com erros parciais." }
+                        default { Write-Output ("AVISO: instalacao terminou com codigo {0}." -f $ri.ResultCode) }
+                    }
+                    if ($ri.RebootRequired) { Write-Output "AVISO: e necessario reiniciar o computador para concluir." }
+                }
+            } catch {
+                Write-Output "ERRO: falha ao instalar pelo Windows Update. $($_.Exception.Message)"
+            }
+        }
+
+        $pacotes = @($plano.Pacotes | Where-Object { $_ })
+        foreach ($pkg in $pacotes) {
+            $choco = Get-Choco
+            if (-not $choco) { Write-Output "ERRO: Chocolatey nao encontrado."; break }
+            Write-Output ("--- Chocolatey: {0} ---" -f $pkg)
+            & $choco install $pkg -y --no-progress 2>&1 | ForEach-Object { Write-Output "  $_" }
+            if ($LASTEXITCODE -eq 0)        { Write-Output "OK: $pkg instalado com sucesso." }
+            elseif ($LASTEXITCODE -eq 3010) { Write-Output "AVISO: $pkg instalado, reinicializacao pendente." }
+            else                            { Write-Output "AVISO: $pkg terminou com codigo $LASTEXITCODE." }
+        }
+
+        if ($ids.Count -eq 0 -and $pacotes.Count -eq 0) { Write-Output "OK: nada selecionado." }
+'@)
+
+    # Snappy Driver Installer Origin: alternativa aberta e sem cadastro ao DriverPack.
+    # Ele baixa os proprios pacotes de driver (varios GB), entao aqui so instalamos a
+    # ferramenta -- usar ou nao fica a criterio de quem esta na maquina.
+    $sdioScript = [scriptblock]::Create($jobPreamble + @'
+
+        Write-Output "--- Snappy Driver Installer Origin (via Chocolatey) ---"
+        $choco = Get-Choco
+        if (-not $choco) { Write-Output "ERRO: Chocolatey nao encontrado."; return }
+        & $choco install sdio -y --no-progress 2>&1 | ForEach-Object { Write-Output "  $_" }
+        if ($LASTEXITCODE -eq 0) {
+            Write-Output "OK: SDIO instalado. Abra pelo menu Iniciar para baixar os pacotes de driver."
+            Write-Output "  Atencao: os pacotes completos ocupam varios GB; ele tambem opera baixando so o necessario."
+        }
+        elseif ($LASTEXITCODE -eq 3010) { Write-Output "AVISO: instalado, reinicializacao pendente." }
+        else                            { Write-Output "AVISO: processo terminou com codigo $LASTEXITCODE." }
 '@)
 
     $upgradeAllScript = [scriptblock]::Create($jobPreamble + @'
@@ -1159,32 +1688,33 @@ public static extern bool SetProcessDPIAware();
 
         # 1) Ha job rodando: drena a saida
         if ($null -ne $script:Job) {
-            $output = Receive-Job -Job $script:Job *>&1
-            foreach ($item in $output) {
-                foreach ($line in ([string]$item -split "`r?`n")) {
-                    $clean = $line.TrimEnd()
-                    if (-not (Test-LogNoise $clean)) { Write-Log $clean }
-                }
-            }
+            Write-JobOutput (Receive-Job -Job $script:Job *>&1)
 
             if ($script:Job.State -in @('Completed', 'Failed', 'Stopped')) {
                 # drena o que sobrou antes de remover
-                $rest = Receive-Job -Job $script:Job *>&1
-                foreach ($item in $rest) {
-                    foreach ($line in ([string]$item -split "`r?`n")) {
-                        $clean = $line.TrimEnd()
-                        if (-not (Test-LogNoise $clean)) { Write-Log $clean }
-                    }
-                }
+                Write-JobOutput (Receive-Job -Job $script:Job *>&1)
+
                 if ($script:Job.State -eq 'Failed') {
                     Write-Log ("ERRO: a tarefa '{0}' falhou." -f $script:JobName) 'error'
+                    $script:TaskHadError = $true
+                    if (-not $script:TaskFirstProblem) { $script:TaskFirstProblem = 'o processo da tarefa falhou' }
                 }
                 Remove-Job -Job $script:Job -Force -ErrorAction SilentlyContinue
                 $script:Job = $null
+                Save-TaskResult
+
+                # Guarda o callback da tarefa para rodar quando a fila terminar.
+                if ($script:CurrentTask -and $script:CurrentTask.OnComplete) {
+                    $script:PendingComplete = $script:CurrentTask.OnComplete
+                    $script:PendingData     = $script:TaskData
+                }
                 $script:DoneTasks++
                 if ($script:DoneTasks -le $progressBar.Maximum) { $progressBar.Value = $script:DoneTasks }
                 Update-PathFromRegistry
             }
+
+            # Uma unica rolagem por ciclo, em vez de uma por linha.
+            if ($script:LogScrollPending) { Update-LogScroll }
             return
         }
 
@@ -1197,7 +1727,13 @@ public static extern bool SetProcessDPIAware();
         # 3) Proxima tarefa da fila
         if ($script:Queue.Count -gt 0) {
             $task = $script:Queue.Dequeue()
+            $script:CurrentTask = $task
+            $script:TaskData    = $null
             $script:JobName   = $task.Name
+            $script:TaskHadError     = $false
+            $script:TaskHadWarn      = $false
+            $script:TaskHadOk        = $false
+            $script:TaskFirstProblem = ''
             $statusLabel.Text = ('Executando: {0}   ({1}/{2})' -f $task.Name, ($script:DoneTasks + 1), $script:TotalTasks)
             Write-Log ('>>> {0}' -f $task.Name) 'head'
             try {
@@ -1208,6 +1744,9 @@ public static extern bool SetProcessDPIAware();
                 }
             } catch {
                 Write-Log ("ERRO: nao foi possivel iniciar a tarefa '{0}'. {1}" -f $task.Name, $_.Exception.Message) 'error'
+                $script:TaskHadError     = $true
+                $script:TaskFirstProblem = 'nao foi possivel iniciar a tarefa'
+                Save-TaskResult
                 $script:DoneTasks++
             }
             return
@@ -1310,6 +1849,9 @@ public static extern bool SetProcessDPIAware();
     $cancelButton.Add_Click({
         $script:Cancelling = $true
         $script:Queue.Clear()
+        # Cancelou: nao abre o modal de resultado.
+        $script:PendingComplete = $null
+        $script:PendingData     = $null
         if ($null -ne $script:Job) {
             Write-Log 'Cancelando... (processos de instalacao ja iniciados podem continuar em segundo plano)' 'warn'
             Stop-Job -Job $script:Job -ErrorAction SilentlyContinue
@@ -1328,7 +1870,35 @@ public static extern bool SetProcessDPIAware();
         Start-Queue
     }
 
-    $checkDriversButton.Add_Click({ & $startSingle 'Verificando drivers' $driverCheckScript $true $false })
+    # A varredura devolve dados; o callback abre o modal e, se algo for marcado, enfileira a
+    # instalacao. O callback so roda depois que a fila para (ver Stop-Queue).
+    $aoTerminarVarredura = {
+        param($dados)
+        $itens = @()
+        if ($dados -and $dados.Itens) { $itens = @($dados.Itens) }
+
+        if ($itens.Count -eq 0) {
+            [Windows.Forms.MessageBox]::Show(
+                'Nenhuma atualizacao de driver pendente e nenhum dispositivo com problema.',
+                'Verificacao de drivers', 'OK', 'Information') | Out-Null
+            return
+        }
+
+        $plano = Show-DriverModal $itens
+        if ($plano -and $plano.Total -gt 0) {
+            Add-Task ('Instalando {0} driver(es)' -f $plano.Total) $driverInstallScript @($plano)
+            Start-Queue
+        } else {
+            Write-Log 'Modal de drivers fechado sem instalar nada.' 'info'
+        }
+    }
+
+    $checkDriversButton.Add_Click({
+        if (-not (Test-Tool 'choco')) { Add-Task 'Preparando o Chocolatey' $chocoBootstrapScript }
+        Add-Task 'Verificando drivers' $driverScanScript @() $aoTerminarVarredura
+        Start-Queue
+    })
+    $sdioButton.Add_Click({ & $startSingle 'Snappy Driver Installer' $sdioScript $true $false })
     $nvidiaButton.Add_Click({     & $startSingle 'Driver NVIDIA'    $nvidiaScript     $true  $false })
     $nvidiaAppButton.Add_Click({  & $startSingle 'NVIDIA App'       $nvidiaAppScript  $true  $false })
     $amdChipsetButton.Add_Click({ & $startSingle 'Chipset AMD'      $amdChipsetScript $true  $false })
