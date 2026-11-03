@@ -56,8 +56,79 @@
       - Log e resumo: rolagem uma vez por ciclo (era por linha, e o custo virava quadratico),
         corte do log preservando o fim, e resumo de sucessos/falhas ao fim da fila.
 
+    Versao 16.4:
+      - Tema escuro aplicado aos paineis, busca e seletores; botoes deixam de usar o estilo
+        visual nativo que ignorava as cores planas. Estados de foco, hover e selecao alinhados.
+      - Raio dos botoes limitado ao tamanho do controle para evitar cantos deformados.
+      - Log atualiza a mesma linha para progresso emitido com carriage return ou percentuais.
+      - WinGet procura o alias do App Installer no perfil e tenta registra-lo para o usuario
+        antes/depois do bootstrap Chocolatey; sucesso so e informado apos confirmar o comando.
+      - Codigo de saida nao nulo do instalador de aplicativos passa a ser classificado como ERRO.
+
+    Versao 16.5:
+      - Registro do App Installer executado antes da elevacao, no perfil do usuario. O
+        bootstrap deixa de repetir Add-AppxPackage elevado (que falhava com 0x80073CF3) e
+        orienta a reiniciar o instalador se o pacote acabou de ser provisionado.
+
+    Versao 16.6:
+      - WinGet tambem pode ser resolvido pelo caminho fisico do App Installer (pacote
+        registrado para qualquer usuario ou provisionado no Windows), sem depender do alias.
+      - Bootstrap verifica o executavel real antes de iniciar a instalacao dos aplicativos.
+
+    Versao 16.7:
+      - O caminho fisico do pacote App Installer tem prioridade sobre o alias por usuario,
+        que pode falhar com Acesso negado em processos elevados do Windows Sandbox.
+      - Saida de falha ao iniciar Winget/Chocolatey nao pode reutilizar um LASTEXITCODE antigo
+        e ser classificada como sucesso.
+
+    Versao 16.8:
+      - Caminho fisico protegido em WindowsApps deixa de ser tratado como executavel do Winget.
+        Apenas o comando/alias de execucao e aceito; App Installer instalado sozinho nao indica
+        que o cliente esta utilizavel.
+
+    Versao 16.9:
+      - Corrigida dependencia ausente encontrada nos logs: Microsoft.WindowsAppRuntime.1.8.
+        O bootstrap instala o runtime oficial assinado pela Microsoft antes de registrar o
+        App Installer, depois confirma que o alias winget.exe pode ser iniciado.
+
+    Versao 16.10:
+      - Corrigida a segunda dependencia encontrada no log: Microsoft.VCLibs.140.00 >=
+        14.0.33519.0. O bootstrap instala VCLibs e Windows App Runtime para a arquitetura
+        nativa do Windows, inclusive em maquinas ARM64 executando PowerShell x64 em emulacao.
+
+    Versao 16.11:
+      - Incluida a dependencia Microsoft.VCLibs.140.00.UWPDesktop >= 14.0.33728.0,
+        identificada no log de implantacao do App Installer. Instalacao pelo ZIP oficial
+        do WinGet com validacao SHA-256 antes do registro.
+
+    Versao 16.12:
+      - Contorno seguro para o hash desatualizado do manifesto Google.Chrome: no codigo
+        especifico de hash divergente, baixa o MSI empresarial da Google, exige assinatura
+        Authenticode valida da Google e executa o MSI silenciosamente. Nenhum hash do WinGet
+        e ignorado e nenhum outro pacote recebe esse tratamento.
+
+    Versao 16.13:
+      - O fallback assinado do Chrome, quando conclui a instalacao, registra a divergencia
+        do manifesto como INFO em vez de AVISO. O resumo agora classifica a tarefa concluida
+        como sucesso, sem ocultar o motivo do fallback no log.
+
+    Versao 16.14:
+      - Adicionado fallback para Microsoft.Office quando o WinGet retorna hash divergente:
+        baixa setup.exe da CDN oficial, valida assinatura Authenticode da Microsoft e usa
+        o parametro silencioso /configure do manifesto oficial do pacote.
+
+    Versao 16.15:
+      - O fallback do Office verifica o servico Software Protection. Se o Windows o mantiver
+        desativado, o instalador encerra com diagnostico claro antes de iniciar o ODT, que
+        falharia no Sandbox ao abrir o Token Store (17002 / 0xC0020036).
+
+    Versao 16.16:
+      - Falha REST da Microsoft Store (0x8A15003B) dispara uma atualizacao da origem msstore
+        e uma unica nova tentativa. Se persistir, o log identifica indisponibilidade da API,
+        sem atribuir a falha a conta ou instalacao local da Store.
+
 .VERSION
-    16.3
+    16.16
 #>
 #endregion
 
@@ -70,7 +141,7 @@
 $ScriptUrl = 'https://is.gd/posinstalador'
 
 $AppTitle   = 'Pos Instalador de Aplicativos'
-$AppVersion = '16.3'
+$AppVersion = '16.16'
 
 #region ELEVACAO
 # Forca TLS 1.2 (necessario em instalacoes antigas do Windows para baixar de HTTPS)
@@ -78,7 +149,6 @@ $AppVersion = '16.3'
 
 $currentUser = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
 if (-not $currentUser.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-
     $baseArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden')
 
     if ($PSCommandPath) {
@@ -170,9 +240,9 @@ public static extern bool SetProcessDPIAware();
 
         if ($Control.Width -le 0 -or $Control.Height -le 0) { return }
 
-        $d = [Math]::Max(2, $Radius * 2)
-        if ($d -gt $Control.Height) { $d = $Control.Height }
-        if ($d -gt $Control.Width)  { $d = $Control.Width  }
+        # O raio deve caber inteiro no menor lado; valores maiores criam arcos que se
+        # sobrepoem e deixam as quinas com aspecto quebrado em botoes baixos.
+        $d = [Math]::Max(2, [Math]::Min($Radius * 2, [Math]::Min($Control.Height, $Control.Width)))
 
         $w = $Control.Width
         $h = $Control.Height
@@ -207,22 +277,22 @@ public static extern bool SetProcessDPIAware();
 
     #region TEMA
     $Theme = @{
-        Bg          = [Drawing.Color]::FromArgb(243, 244, 246)
-        HeaderBg    = [Drawing.Color]::FromArgb(30, 41, 59)
-        HeaderFg    = [Drawing.Color]::White
+        Bg          = [Drawing.Color]::FromArgb(15, 23, 42)
+        HeaderBg    = [Drawing.Color]::FromArgb(11, 17, 32)
+        HeaderFg    = [Drawing.Color]::FromArgb(248, 250, 252)
         HeaderDim   = [Drawing.Color]::FromArgb(148, 163, 184)
-        PanelBg     = [Drawing.Color]::White
-        Border      = [Drawing.Color]::FromArgb(203, 213, 225)
-        Text        = [Drawing.Color]::FromArgb(30, 41, 59)
-        ChipBg      = [Drawing.Color]::White
-        ChipBorder  = [Drawing.Color]::FromArgb(203, 213, 225)
-        ChipOn      = [Drawing.Color]::FromArgb(209, 250, 229)
-        ChipOnBrd   = [Drawing.Color]::FromArgb(16, 122, 87)
-        ChipHover   = [Drawing.Color]::FromArgb(226, 232, 240)
-        Green       = [Drawing.Color]::FromArgb(21, 128, 61)
-        GreenLight  = [Drawing.Color]::FromArgb(34, 197, 94)
-        Red         = [Drawing.Color]::FromArgb(220, 38, 38)
-        Orange      = [Drawing.Color]::FromArgb(217, 119, 6)
+        PanelBg     = [Drawing.Color]::FromArgb(30, 41, 59)
+        Border      = [Drawing.Color]::FromArgb(51, 65, 85)
+        Text        = [Drawing.Color]::FromArgb(226, 232, 240)
+        ChipBg      = [Drawing.Color]::FromArgb(30, 41, 59)
+        ChipBorder  = [Drawing.Color]::FromArgb(71, 85, 105)
+        ChipOn      = [Drawing.Color]::FromArgb(6, 78, 59)
+        ChipOnBrd   = [Drawing.Color]::FromArgb(52, 211, 153)
+        ChipHover   = [Drawing.Color]::FromArgb(51, 65, 85)
+        Green       = [Drawing.Color]::FromArgb(5, 150, 105)
+        GreenLight  = [Drawing.Color]::FromArgb(52, 211, 153)
+        Red         = [Drawing.Color]::FromArgb(190, 24, 60)
+        Orange      = [Drawing.Color]::FromArgb(180, 83, 9)
         Nvidia      = [Drawing.Color]::FromArgb(101, 163, 13)
         Amd         = [Drawing.Color]::FromArgb(190, 24, 60)
         LogBg       = [Drawing.Color]::FromArgb(24, 24, 27)
@@ -414,6 +484,7 @@ public static extern bool SetProcessDPIAware();
     # --- Barra inferior: progresso e acoes principais ---
     $bottomBar = New-Object Windows.Forms.Panel
     $bottomBar.Dock    = 'Bottom'
+    $bottomBar.BackColor = $Theme.Bg
     $bottomBar.Height  = Px 58
     $bottomBar.Padding = New-Object Windows.Forms.Padding((Px 10), (Px 6), (Px 10), (Px 10))
 
@@ -424,6 +495,7 @@ public static extern bool SetProcessDPIAware();
     $installButton.Font      = $FontUIBold
     $installButton.Width     = (Get-TextWidth $installButton.Text $FontUIBold) + (Px 30)
     $installButton.FlatStyle = 'Flat'
+    $installButton.UseVisualStyleBackColor = $false
     $installButton.FlatAppearance.BorderSize = 0
     $installButton.BackColor = $Theme.Green
     $installButton.ForeColor = [Drawing.Color]::White
@@ -435,6 +507,7 @@ public static extern bool SetProcessDPIAware();
     $cancelButton.Font      = $FontUI
     $cancelButton.Width     = (Get-TextWidth $cancelButton.Text $FontUI) + (Px 30)
     $cancelButton.FlatStyle = 'Flat'
+    $cancelButton.UseVisualStyleBackColor = $false
     $cancelButton.BackColor = $Theme.PanelBg
     $cancelButton.FlatAppearance.BorderColor = $Theme.Border
     $cancelButton.Enabled   = $false
@@ -490,6 +563,7 @@ public static extern bool SetProcessDPIAware();
     $toolsBox.Font      = $FontUIBold
     $toolsBox.ForeColor = $Theme.Text
     $toolsBox.Padding   = New-Object Windows.Forms.Padding((Px 8), (Px 2), (Px 8), (Px 6))
+    $toolsBox.BackColor = $Theme.Bg
 
     $toolsColumns = 8
     $toolsTable = New-Object Windows.Forms.TableLayoutPanel
@@ -507,11 +581,14 @@ public static extern bool SetProcessDPIAware();
         $b.Dock      = 'Fill'
         $b.Margin    = New-Object Windows.Forms.Padding((Px 3))
         $b.FlatStyle = 'Flat'
+        $b.UseVisualStyleBackColor = $false
         $b.Font      = $FontUI
         $b.Cursor    = 'Hand'
         $b.BackColor = $Back
         $b.ForeColor = $Fore
         $b.FlatAppearance.BorderSize = 0
+        $b.FlatAppearance.MouseOverBackColor = [Drawing.Color]::FromArgb(71, 85, 105)
+        $b.FlatAppearance.MouseDownBackColor = [Drawing.Color]::FromArgb(30, 41, 59)
         Set-Rounded $b
         return $b
     }
@@ -570,13 +647,15 @@ public static extern bool SetProcessDPIAware();
     $searchBox = New-Object Windows.Forms.TextBox
     $searchBox.Width  = Px 200
     $searchBox.Font   = $FontUI
+    $searchBox.BackColor = $Theme.PanelBg
+    $searchBox.ForeColor = $Theme.Text
     $searchBox.Margin = New-Object Windows.Forms.Padding(0, 0, (Px 10), 0)
 
     $searchHint = New-Object Windows.Forms.Label
     $searchHint.Text      = 'Filtrar programas...'
     $searchHint.Font      = $FontUI
-    $searchHint.ForeColor = [Drawing.Color]::Gray
-    $searchHint.BackColor = [Drawing.Color]::White
+    $searchHint.ForeColor = $Theme.HeaderDim
+    $searchHint.BackColor = $Theme.PanelBg
     $searchHint.AutoSize  = $true
     $searchHint.Location  = New-Object Drawing.Point((Px 3), (Px 3))
     $searchHint.Parent    = $searchBox
@@ -595,10 +674,14 @@ public static extern bool SetProcessDPIAware();
         $b.Width     = (Get-TextWidth $Text $FontUI) + (Px 22)
         $b.Margin    = New-Object Windows.Forms.Padding(0, 0, (Px 5), 0)
         $b.FlatStyle = 'Flat'
+        $b.UseVisualStyleBackColor = $false
         $b.BackColor = $Theme.PanelBg
         $b.Cursor    = 'Hand'
         $b.FlatAppearance.BorderColor = $Theme.Border
-        Set-Rounded $b (Px 5)
+        $b.FlatAppearance.BorderSize = 1
+        $b.FlatAppearance.MouseOverBackColor = $Theme.ChipHover
+        $b.FlatAppearance.MouseDownBackColor = $Theme.ChipOn
+        Set-Rounded $b (Px 7)
         return $b
     }
 
@@ -656,6 +739,7 @@ public static extern bool SetProcessDPIAware();
             $chip.Tag        = [pscustomobject]@{ Nome = $app.Nome; ID = $app.ID; Src = $src; Def = [bool]$app.Def; Show = $true }
             $chip.TextAlign  = 'MiddleCenter'
             $chip.FlatStyle  = 'Flat'
+            $chip.UseVisualStyleBackColor = $false
             $chip.Font       = $FontChip
             $chip.Margin     = New-Object Windows.Forms.Padding(0, 0, $chipGap, $chipGap)
             $chip.BackColor  = $Theme.ChipBg
@@ -671,7 +755,8 @@ public static extern bool SetProcessDPIAware();
             $chip.FlatAppearance.BorderColor         = $Theme.ChipBorder
             $chip.FlatAppearance.CheckedBackColor    = $Theme.ChipOn
             $chip.FlatAppearance.MouseOverBackColor  = $Theme.ChipHover
-            Set-Rounded $chip (Px 5)
+            $chip.FlatAppearance.MouseDownBackColor = $Theme.ChipOn
+            Set-Rounded $chip (Px 7)
             $tip.SetToolTip($chip, "$($app.Nome)`n$($app.ID)  [$src]")
 
             # Apenas cor e borda mudam ao marcar. Alternar o peso da fonte redimensionaria o chip
@@ -706,6 +791,7 @@ public static extern bool SetProcessDPIAware();
     $logLabel = New-Object Windows.Forms.Label
     $logLabel.Text        = 'Log de execucao'
     $logLabel.Font        = $FontUIBold
+    $logLabel.ForeColor   = $Theme.Text
     $logLabel.AutoSize    = $true
     $logLabel.TextAlign   = 'MiddleLeft'
     $logLabel.MinimumSize = New-Object Drawing.Size(0, $barItemHeight)
@@ -714,6 +800,8 @@ public static extern bool SetProcessDPIAware();
     $autoScrollCheck = New-Object Windows.Forms.CheckBox
     $autoScrollCheck.Text        = 'Auto-rolagem'
     $autoScrollCheck.Font        = $FontUI
+    $autoScrollCheck.ForeColor   = $Theme.Text
+    $autoScrollCheck.BackColor   = $Theme.Bg
     $autoScrollCheck.Checked     = $true
     $autoScrollCheck.AutoSize    = $true
     $autoScrollCheck.MinimumSize = New-Object Drawing.Size(0, $barItemHeight)
@@ -872,7 +960,7 @@ public static extern bool SetProcessDPIAware();
     }
 
     function Write-Log {
-        param([string]$Text, [string]$Level = 'auto', [switch]$Deferred)
+        param([string]$Text, [string]$Level = 'auto', [switch]$Deferred, [switch]$Progress)
 
         if ($null -eq $Text) { return }
 
@@ -894,6 +982,15 @@ public static extern bool SetProcessDPIAware();
 
         Limit-LogSize
 
+        # Saida nativa de instaladores usa CR para redesenhar a mesma linha de progresso.
+        # Atualize a linha atual em vez de criar uma linha nova para cada percentual.
+        if ($Progress -and $null -ne $script:ProgressLineStart) {
+            $logBox.Select($script:ProgressLineStart, $logBox.TextLength - $script:ProgressLineStart)
+            $logBox.SelectedText = ''
+        } else {
+            $logBox.SelectionStart = $logBox.TextLength
+            $script:ProgressLineStart = $logBox.TextLength
+        }
         $logBox.SelectionStart  = $logBox.TextLength
         $logBox.SelectionLength = 0
         $logBox.SelectionColor  = $Theme.LogDim
@@ -901,6 +998,7 @@ public static extern bool SetProcessDPIAware();
         $logBox.SelectionColor  = $color
         $logBox.AppendText("$Text`n")
         $logBox.SelectionColor  = $Theme.LogFg
+        if (-not $Progress) { $script:ProgressLineStart = $null }
 
         # -Deferred: usado quando o timer esta despejando um lote de saida. Rolar a cada linha
         # custa O(n) e o total vira quadratico -- medido em 1,45 ms/linha com 200 linhas no log
@@ -922,8 +1020,22 @@ public static extern bool SetProcessDPIAware();
         $mainForm.Cursor      = if ($Busy) { 'AppStarting' } else { 'Default' }
     }
 
+    function Find-WingetExe {
+        $cmd = Get-Command 'winget' -ErrorAction SilentlyContinue
+        if ($cmd) { return $cmd.Source }
+        if ($env:LOCALAPPDATA) {
+            $aliasPath = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\winget.exe'
+            if (Test-Path $aliasPath) { return $aliasPath }
+        }
+        # Nao retornar o binario dentro de Program Files\WindowsApps: o Windows protege essa
+        # pasta e a chamada direta falha com Acesso negado. O pacote instalado nao basta; o
+        # alias de execucao do usuario precisa estar registrado.
+        return $null
+    }
+
     function Test-Tool {
         param([string]$Name)
+        if ($Name -eq 'winget') { return [bool](Find-WingetExe) }
         return [bool](Get-Command $Name -ErrorAction SilentlyContinue)
     }
 
@@ -947,8 +1059,17 @@ public static extern bool SetProcessDPIAware();
                 $script:TaskData = $item
                 continue
             }
-            foreach ($line in ([string]$item -split "`r?`n")) {
-                $clean = $line.TrimEnd()
+            # CR isolado e usado por winget/choco para redesenhar barras. Dividimos CR e LF
+            # mantendo a informacao de qual fragmento ainda e progresso transitorio.
+            $parts = [regex]::Split([string]$item, '([\r\n]+)')
+            $progressFragment = $false
+            for ($i = 0; $i -lt $parts.Count; $i++) {
+                $piece = $parts[$i]
+                if ($piece -match '^[\r\n]+$') {
+                    $progressFragment = $piece.Contains("`r")
+                    continue
+                }
+                $clean = $piece.TrimEnd()
                 if (Test-LogNoise $clean) { continue }
 
                 if     ($clean -match '^\s*ERRO')  { $script:TaskHadError = $true }
@@ -959,7 +1080,11 @@ public static extern bool SetProcessDPIAware();
                     $script:TaskFirstProblem = $clean.Trim()
                 }
 
-                Write-Log $clean -Deferred
+                # Alguns hosts convertem cada CR de uma ferramenta nativa em um objeto
+                # separado. O percentual permite reconhecer esses fragmentos tambem.
+                $isProgress = $progressFragment -or ($clean -match '(?i)\b\d{1,3}%')
+                if ($isProgress) { Write-Log $clean -Deferred -Progress }
+                else             { Write-Log $clean -Deferred }
             }
         }
     }
@@ -1072,6 +1197,7 @@ public static extern bool SetProcessDPIAware();
             $b.Font      = $FontUI
             $b.Width     = (Get-TextWidth $Texto $FontUI) + (Px 30)
             $b.FlatStyle = 'Flat'
+            $b.UseVisualStyleBackColor = $false
             $b.BackColor = $Fundo
             $b.ForeColor = $Frente
             $b.Cursor    = 'Hand'
@@ -1210,7 +1336,17 @@ public static extern bool SetProcessDPIAware();
             return $null
         }
         function Get-Choco  { Resolve-Exe 'choco'  @("$env:ProgramData\chocolatey\bin\choco.exe") }
-        function Get-Winget { Resolve-Exe 'winget' @() }
+        function Get-Winget {
+            $aliases = @()
+            if ($env:LOCALAPPDATA) {
+                $base = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps'
+                $aliases += (Join-Path $base 'winget.exe')
+                $aliases += (Join-Path $base 'Microsoft.DesktopAppInstaller_8wekyb3d8bbwe\winget.exe')
+            }
+            $exe = Resolve-Exe 'winget' $aliases
+            if ($exe) { return $exe }
+            return $null
+        }
 
         function Show-WingetResult([int]$code, [string]$nome) {
             switch ($code) {
@@ -1218,8 +1354,9 @@ public static extern bool SetProcessDPIAware();
                 -1978335189  { "OK: $nome ja instalado / nada a fazer." }
                 -1978335212  { "ERRO: pacote de $nome nao encontrado no repositorio." }
                 -1978335216  { "ERRO: $nome - contrato de origem nao aceito." }
+                -1978335173  { "ERRO: origem Microsoft Store indisponivel (falha interna da API REST, 0x8A15003B)." }
                 -1978334956  { "AVISO: $nome exige reinicializacao para concluir." }
-                default      { "AVISO: $nome terminou com codigo $code." }
+                default      { "ERRO: $nome terminou com codigo $code." }
             }
         }
 '@
@@ -1234,10 +1371,14 @@ public static extern bool SetProcessDPIAware();
         if ($app.Src -eq 'choco') {
             $choco = Get-Choco
             if (-not $choco) { Write-Output "ERRO: Chocolatey nao encontrado."; return }
-            & $choco install $app.ID -y --no-progress 2>&1 | ForEach-Object { Write-Output "  $_" }
-            if ($LASTEXITCODE -eq 0)      { Write-Output "OK: $($app.Nome) instalado com sucesso via Chocolatey." }
-            elseif ($LASTEXITCODE -eq 3010) { Write-Output "AVISO: $($app.Nome) instalado, reinicializacao pendente." }
-            else                          { Write-Output "AVISO: $($app.Nome) terminou com codigo $LASTEXITCODE." }
+            $LASTEXITCODE = $null
+            $chocoOutput = @(& $choco install $app.ID -y --no-progress 2>&1)
+            $chocoCode = $LASTEXITCODE
+            $chocoOutput | ForEach-Object { Write-Output "  $_" }
+            if ($null -eq $chocoCode) { Write-Output "ERRO: nao foi possivel iniciar Chocolatey em $choco." }
+            elseif ($chocoCode -eq 0)   { Write-Output "OK: $($app.Nome) instalado com sucesso via Chocolatey." }
+            elseif ($chocoCode -eq 3010) { Write-Output "AVISO: $($app.Nome) instalado, reinicializacao pendente." }
+            else                        { Write-Output "ERRO: $($app.Nome) terminou com codigo $chocoCode." }
             return
         }
 
@@ -1251,13 +1392,100 @@ public static extern bool SetProcessDPIAware();
         if ($app.Src -eq 'msstore') { $wingetArgs += @('--source', 'msstore') }
         else                        { $wingetArgs += @('--source', 'winget')  }
 
+        Write-Output ("EXECUTAVEL: {0}" -f $winget)
         Write-Output ("COMANDO: winget {0}" -f ($wingetArgs -join ' '))
-        & $winget @wingetArgs 2>&1 | ForEach-Object { Write-Output "  $_" }
+        $LASTEXITCODE = $null
+        $wingetOutput = @(& $winget @wingetArgs 2>&1)
         $code = $LASTEXITCODE
+        $wingetOutput | ForEach-Object { Write-Output "  $_" }
+        if ($code -eq -1978335173 -and $app.Src -eq 'msstore') {
+            Write-Output 'INFO: falha REST na Microsoft Store; atualizando a origem msstore e repetindo uma vez.'
+            $LASTEXITCODE = $null
+            $sourceUpdateOutput = @(& $winget source update --name msstore --disable-interactivity 2>&1)
+            $sourceUpdateCode = $LASTEXITCODE
+            $sourceUpdateOutput | ForEach-Object { Write-Output "  $_" }
+            if ($sourceUpdateCode -eq 0) {
+                $LASTEXITCODE = $null
+                $wingetOutput = @(& $winget @wingetArgs 2>&1)
+                $code = $LASTEXITCODE
+                Write-Output 'INFO: resultado da unica nova tentativa pela origem msstore:'
+                $wingetOutput | ForEach-Object { Write-Output "  $_" }
+            } else {
+                Write-Output ("INFO: a origem msstore tambem nao atualizou (codigo {0}); mantendo a falha original." -f $sourceUpdateCode)
+            }
+        }
+        if ($null -eq $code) {
+            Write-Output "ERRO: nao foi possivel iniciar winget.exe em $winget. Nenhuma instalacao foi confirmada."
+            return
+        }
+
+        # O setup.exe do Office usa o Office Deployment Tool. Em caso de hash divergente
+        # no manifesto, valida o editor Microsoft e reaplica o switch silencioso oficial.
+        if ($code -eq -1978335215 -and $app.ID -eq 'Microsoft.Office') {
+            $softwareProtection = Get-CimInstance Win32_Service -Filter "Name='sppsvc'" -ErrorAction SilentlyContinue
+            if ($softwareProtection -and $softwareProtection.StartMode -eq 'Disabled') {
+                Write-Output 'ERRO: este Windows mantem o servico Software Protection (sppsvc) desativado e bloqueia sua ativacao. O Office Click-to-Run nao pode abrir o Token Store neste Sandbox; teste em uma VM Windows completa com o servico habilitado.'
+                return
+            }
+            $officeSetup = Join-Path $env:TEMP ('MicrosoftOfficeSetup-{0}.exe' -f [Guid]::NewGuid().ToString('N'))
+            try {
+                Write-Output 'INFO: hash do manifesto Microsoft.Office divergente; validando setup.exe oficial assinado pela Microsoft.'
+                Invoke-WebRequest -Uri 'https://officecdn.microsoft.com/pr/wsus/setup.exe' -OutFile $officeSetup -UseBasicParsing -TimeoutSec 600 -ErrorAction Stop
+                $officeSignature = Get-AuthenticodeSignature -FilePath $officeSetup
+                if ($officeSignature.Status -ne 'Valid' -or -not $officeSignature.SignerCertificate -or
+                    $officeSignature.SignerCertificate.Subject -notmatch '(^|,\s*)O=Microsoft Corporation(,|$)') {
+                    throw ("Assinatura do setup.exe invalida ou o editor nao e Microsoft Corporation. Status: {0}; editor: {1}" -f
+                        $officeSignature.Status, $officeSignature.SignerCertificate.Subject)
+                }
+                Write-Output ("Assinatura Authenticode valida: {0}." -f $officeSignature.SignerCertificate.Subject)
+                $officeProcess = Start-Process -FilePath $officeSetup -ArgumentList '/configure https://aka.ms/fhlwingetconfig' -Wait -PassThru -ErrorAction Stop
+                switch ($officeProcess.ExitCode) {
+                    0    { Write-Output 'OK: Microsoft Office instalado com sucesso via Office Deployment Tool oficial.' }
+                    3010 { Write-Output 'AVISO: Microsoft Office instalado; reinicializacao necessaria.' }
+                    default { Write-Output ("ERRO: Office Deployment Tool terminou com codigo {0}. Consulte os logs do ODT em %TEMP%." -f $officeProcess.ExitCode) }
+                }
+            } catch {
+                Write-Output ("ERRO: fallback seguro do Microsoft Office nao concluido. {0}" -f $_.Exception.Message)
+            } finally {
+                Remove-Item -LiteralPath $officeSetup -Force -ErrorAction SilentlyContinue
+            }
+            return
+        }
+
+        # O endpoint estavel da Google pode publicar um MSI novo antes da atualizacao do
+        # hash no manifesto Google.Chrome. So nesse erro e nesse pacote, valida a assinatura
+        # Authenticode do editor antes de chamar o Windows Installer.
+        if ($code -eq -1978335215 -and $app.ID -eq 'Google.Chrome') {
+            $chromeMsi = Join-Path $env:TEMP ('GoogleChromeEnterprise-{0}.msi' -f [Guid]::NewGuid().ToString('N'))
+            try {
+                Write-Output 'INFO: hash do manifesto Google.Chrome desatualizado; validando o MSI oficial assinado pela Google.'
+                Invoke-WebRequest -Uri 'https://dl.google.com/dl/chrome/install/googlechromestandaloneenterprise64.msi' -OutFile $chromeMsi -UseBasicParsing -TimeoutSec 600 -ErrorAction Stop
+                $chromeSignature = Get-AuthenticodeSignature -FilePath $chromeMsi
+                if ($chromeSignature.Status -ne 'Valid' -or -not $chromeSignature.SignerCertificate -or
+                    $chromeSignature.SignerCertificate.Subject -notmatch '(^|,\s*)O=Google LLC(,|$)') {
+                    throw ("Assinatura do MSI invalida ou o editor nao e Google LLC. Status: {0}; editor: {1}" -f
+                        $chromeSignature.Status, $chromeSignature.SignerCertificate.Subject)
+                }
+                Write-Output ("Assinatura Authenticode valida: {0}." -f $chromeSignature.SignerCertificate.Subject)
+                $msiexec = Join-Path $env:SystemRoot 'System32\msiexec.exe'
+                $msiProcess = Start-Process -FilePath $msiexec -ArgumentList @('/i', "`"$chromeMsi`"", '/qn', '/norestart') -Wait -PassThru -ErrorAction Stop
+                switch ($msiProcess.ExitCode) {
+                    0    { Write-Output 'OK: Chrome instalado com sucesso via MSI oficial da Google.' }
+                    3010 { Write-Output 'AVISO: Chrome instalado via MSI oficial da Google; reinicializacao necessaria.' }
+                    default { Write-Output ("ERRO: MSI oficial do Chrome terminou com codigo {0}." -f $msiProcess.ExitCode) }
+                }
+            } catch {
+                Write-Output ("ERRO: fallback seguro do Chrome nao concluido. {0}" -f $_.Exception.Message)
+            } finally {
+                Remove-Item -LiteralPath $chromeMsi -Force -ErrorAction SilentlyContinue
+            }
+            return
+        }
+
         Write-Output (Show-WingetResult $code $app.Nome)
         if ($code -ne 0 -and $app.Src -eq 'msstore') {
-            Write-Output "  DICA: pacotes da Microsoft Store dependem da Store instalada e de uma conta Microsoft."
-            Write-Output "  Em Windows LTSC, ou com a Store removida, este item nao instala por aqui."
+            Write-Output "  DICA: verifique a conectividade com a API da Microsoft Store, a regiao do Windows e os contratos da origem."
+            Write-Output "  Em Windows Sandbox ou LTSC, a origem Store pode estar indisponivel mesmo com Winget funcionando."
         }
 '@)
 
@@ -1282,13 +1510,177 @@ public static extern bool SetProcessDPIAware();
 
         Write-Output "--- Instalando o Winget (via Chocolatey) ---"
         if (Get-Winget) { Write-Output "OK: Winget ja esta instalado."; return }
+
         $choco = Get-Choco
         if (-not $choco) { Write-Output "ERRO: Chocolatey indisponivel, nao e possivel instalar o Winget."; return }
+
+        # Os logs do AppX mostram que App Installer 1.29.380 requer
+        # Microsoft.WindowsAppRuntime.1.8 >= 8000.616.304.0. Instale o redistribuivel
+        # oficial assinado antes de tentar registrar o pacote App Installer.
+        # Detecte a arquitetura nativa do Windows, nao a do processo: PowerShell x64 pode
+        # estar emulando em Windows ARM64, e o AppX exige os frameworks da arquitetura ARM64.
+        try { $runtimeArch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant() }
+        catch {
+            $nativeArch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
+            $runtimeArch = switch -Regex ($nativeArch) {
+                '^(AMD64|x64)$' { 'x64'; break }
+                '^(ARM64)$'     { 'arm64'; break }
+                default         { 'x86' }
+            }
+        }
+        if ($runtimeArch -notin @('x64', 'x86', 'arm64')) {
+            Write-Output ("ERRO: arquitetura do Windows nao suportada pelo bootstrap: {0}." -f $runtimeArch)
+            return
+        }
+        $runtimeMin = [version]'8000.616.304.0'
+        $runtimeInstalled = @()
+        try {
+            $runtimeInstalled = @(Get-AppxPackage -AllUsers -Name 'Microsoft.WindowsAppRuntime.1.8' -ErrorAction Stop |
+                Where-Object { [version]$_.Version -ge $runtimeMin -and $_.Architecture.ToString() -ieq $runtimeArch })
+        } catch { }
+
+        if ($runtimeInstalled.Count -eq 0) {
+            $runtimeVersion = '1.8.260508005'
+            $runtimeUrl = "https://aka.ms/windowsappsdk/1.8/$runtimeVersion/windowsappruntimeinstall-$runtimeArch.exe"
+            $runtimeFile = Join-Path $env:TEMP ('WindowsAppRuntimeInstall-{0}-{1}.exe' -f $runtimeArch, [Guid]::NewGuid().ToString('N'))
+            try {
+                Write-Output ("Baixando Windows App Runtime 1.8 ({0}) da Microsoft..." -f $runtimeArch)
+                Invoke-WebRequest -Uri $runtimeUrl -OutFile $runtimeFile -UseBasicParsing -TimeoutSec 180 -ErrorAction Stop
+                $signature = Get-AuthenticodeSignature -FilePath $runtimeFile
+                if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'Microsoft Corporation') {
+                    throw 'A assinatura digital do instalador Windows App Runtime nao e valida ou nao pertence a Microsoft.'
+                }
+                $runtimeProcess = Start-Process -FilePath $runtimeFile -ArgumentList '--quiet' -Wait -PassThru -ErrorAction Stop
+                if ($runtimeProcess.ExitCode -ne 0) { throw "O instalador Windows App Runtime terminou com codigo $($runtimeProcess.ExitCode)." }
+                Write-Output 'OK: Windows App Runtime 1.8 instalado.'
+            } catch {
+                Write-Output ("ERRO: nao foi possivel instalar Windows App Runtime 1.8. {0}" -f $_.Exception.Message)
+                return
+            } finally {
+                Remove-Item -LiteralPath $runtimeFile -Force -ErrorAction SilentlyContinue
+            }
+        } else {
+            Write-Output ("OK: Windows App Runtime 1.8 ja instalado (versao {0})." -f $runtimeInstalled[0].Version)
+        }
+
+        # A falha mais recente do AppX cita Microsoft.VCLibs.140.00 >= 14.0.33519.0.
+        # Use o pacote assinado incluido no release oficial do WinGet e confira o SHA-256
+        # do ZIP antes de instalar o framework da arquitetura nativa.
+        $vclibsMin = [version]'14.0.33519.0'
+        $vclibsInstalled = @()
+        try {
+            $vclibsInstalled = @(Get-AppxPackage -AllUsers -Name 'Microsoft.VCLibs.140.00' -ErrorAction Stop |
+                Where-Object { [version]$_.Version -ge $vclibsMin -and ($_.Architecture.ToString() -ieq $runtimeArch -or $_.Architecture.ToString() -ieq 'neutral') })
+        } catch { }
+
+        if ($vclibsInstalled.Count -eq 0) {
+            $dependenciesUrl = 'https://github.com/microsoft/winget-cli/releases/download/v1.12.350/DesktopAppInstaller_Dependencies.zip'
+            $dependenciesSha256 = '906CAD3B2BE067D816B20EA4EB1DF541F8A23AC4A4AA9FED70CE675CD918E6A6'
+            $dependenciesRoot = Join-Path $env:TEMP ('winget-dependencies-{0}' -f [Guid]::NewGuid().ToString('N'))
+            $dependenciesZip = "$dependenciesRoot.zip"
+            try {
+                Write-Output ("Baixando Microsoft.VCLibs.140.00 ({0})..." -f $runtimeArch)
+                Invoke-WebRequest -Uri $dependenciesUrl -OutFile $dependenciesZip -UseBasicParsing -TimeoutSec 180 -ErrorAction Stop
+                $actualHash = (Get-FileHash -LiteralPath $dependenciesZip -Algorithm SHA256).Hash
+                if ($actualHash -ne $dependenciesSha256) { throw "SHA-256 inesperado para o pacote de dependencias: $actualHash" }
+                Expand-Archive -LiteralPath $dependenciesZip -DestinationPath $dependenciesRoot -Force -ErrorAction Stop
+                $vclibsFile = Join-Path $dependenciesRoot (Join-Path $runtimeArch "Microsoft.VCLibs.140.00_14.0.33519.0_$($runtimeArch).appx")
+                if (-not (Test-Path -LiteralPath $vclibsFile)) { throw "O pacote VCLibs para $runtimeArch nao esta no arquivo oficial." }
+                Add-AppxPackage -Path $vclibsFile -ErrorAction Stop
+                $vclibsInstalled = @(Get-AppxPackage -AllUsers -Name 'Microsoft.VCLibs.140.00' -ErrorAction Stop |
+                    Where-Object { [version]$_.Version -ge $vclibsMin -and ($_.Architecture.ToString() -ieq $runtimeArch -or $_.Architecture.ToString() -ieq 'neutral') })
+                if ($vclibsInstalled.Count -eq 0) { throw 'A instalacao terminou, mas o framework VCLibs nao foi registrado para a arquitetura nativa.' }
+                Write-Output ("OK: Microsoft.VCLibs.140.00 {0} instalado para {1}." -f $vclibsInstalled[0].Version, $runtimeArch)
+            } catch {
+                Write-Output ("ERRO: nao foi possivel instalar Microsoft.VCLibs.140.00. {0}" -f $_.Exception.Message)
+                return
+            } finally {
+                Remove-Item -LiteralPath $dependenciesZip -Force -ErrorAction SilentlyContinue
+                Remove-Item -LiteralPath $dependenciesRoot -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        } else {
+            Write-Output ("OK: Microsoft.VCLibs.140.00 ja instalado (versao {0}, arquitetura {1})." -f
+                $vclibsInstalled[0].Version, $vclibsInstalled[0].Architecture)
+        }
+
+        # O App Installer 1.29.380 tambem exige o framework UWPDesktop, que e
+        # diferente de Microsoft.VCLibs.140.00 e tem versao minima 14.0.33728.0.
+        $vclibsDesktopMin = [version]'14.0.33728.0'
+        $vclibsDesktopInstalled = @()
+        try {
+            $vclibsDesktopInstalled = @(Get-AppxPackage -AllUsers -Name 'Microsoft.VCLibs.140.00.UWPDesktop' -ErrorAction Stop |
+                Where-Object { [version]$_.Version -ge $vclibsDesktopMin -and ($_.Architecture.ToString() -ieq $runtimeArch -or $_.Architecture.ToString() -ieq 'neutral') })
+        } catch { }
+
+        if ($vclibsDesktopInstalled.Count -eq 0) {
+            $desktopDependenciesUrl = 'https://github.com/microsoft/winget-cli/releases/download/v1.9.25180/DesktopAppInstaller_Dependencies.zip'
+            $desktopDependenciesSha256 = 'EEBA62F08531C8669B3E5FB895CE8800AE66D798739CDA2B4AEF2A1D80A5F3C5'
+            $desktopDependenciesRoot = Join-Path $env:TEMP ('winget-desktop-dependencies-{0}' -f [Guid]::NewGuid().ToString('N'))
+            $desktopDependenciesZip = "$desktopDependenciesRoot.zip"
+            try {
+                Write-Output ("Baixando Microsoft.VCLibs.140.00.UWPDesktop ({0})..." -f $runtimeArch)
+                Invoke-WebRequest -Uri $desktopDependenciesUrl -OutFile $desktopDependenciesZip -UseBasicParsing -TimeoutSec 180 -ErrorAction Stop
+                $desktopActualHash = (Get-FileHash -LiteralPath $desktopDependenciesZip -Algorithm SHA256).Hash
+                if ($desktopActualHash -ne $desktopDependenciesSha256) { throw "SHA-256 inesperado para o pacote UWPDesktop: $desktopActualHash" }
+                Expand-Archive -LiteralPath $desktopDependenciesZip -DestinationPath $desktopDependenciesRoot -Force -ErrorAction Stop
+                $desktopVclibsFile = Join-Path $desktopDependenciesRoot (Join-Path $runtimeArch "Microsoft.VCLibs.140.00.UWPDesktop_14.0.33728.0_$($runtimeArch).appx")
+                if (-not (Test-Path -LiteralPath $desktopVclibsFile)) { throw "O pacote UWPDesktop para $runtimeArch nao esta no arquivo oficial." }
+                Add-AppxPackage -Path $desktopVclibsFile -ErrorAction Stop
+                $vclibsDesktopInstalled = @(Get-AppxPackage -AllUsers -Name 'Microsoft.VCLibs.140.00.UWPDesktop' -ErrorAction Stop |
+                    Where-Object { [version]$_.Version -ge $vclibsDesktopMin -and ($_.Architecture.ToString() -ieq $runtimeArch -or $_.Architecture.ToString() -ieq 'neutral') })
+                if ($vclibsDesktopInstalled.Count -eq 0) { throw 'A instalacao terminou, mas o framework UWPDesktop nao foi registrado para a arquitetura nativa.' }
+                Write-Output ("OK: Microsoft.VCLibs.140.00.UWPDesktop {0} instalado para {1}." -f $vclibsDesktopInstalled[0].Version, $runtimeArch)
+            } catch {
+                Write-Output ("ERRO: nao foi possivel instalar Microsoft.VCLibs.140.00.UWPDesktop. {0}" -f $_.Exception.Message)
+                return
+            } finally {
+                Remove-Item -LiteralPath $desktopDependenciesZip -Force -ErrorAction SilentlyContinue
+                Remove-Item -LiteralPath $desktopDependenciesRoot -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        } else {
+            Write-Output ("OK: Microsoft.VCLibs.140.00.UWPDesktop ja instalado (versao {0}, arquitetura {1})." -f
+                $vclibsDesktopInstalled[0].Version, $vclibsDesktopInstalled[0].Architecture)
+        }
+
         # O pacote correto e 'winget-cli'. O antigo 'microsoft-winget' nao existe no repositorio,
         # entao este bootstrap nunca funcionou.
-        & $choco install winget-cli -y --no-progress 2>&1 | ForEach-Object { Write-Output "  $_" }
-        if ($LASTEXITCODE -eq 0) { Write-Output "OK: Winget instalado com sucesso." }
-        else                     { Write-Output "AVISO: instalacao do Winget terminou com codigo $LASTEXITCODE." }
+        $chocoOutput = & $choco install winget-cli -y --no-progress 2>&1
+        $chocoCode = $LASTEXITCODE
+        $chocoOutput | ForEach-Object { Write-Output "  $_" }
+        if ($chocoCode -ne 0 -and $chocoCode -ne 3010) {
+            Write-Output "ERRO: Chocolatey terminou com codigo $chocoCode ao instalar o Winget."
+            return
+        }
+
+        # O alias e criado ao registrar o App Installer para o usuario atual. Agora a
+        # dependencia foi instalada, entao o registro nao deve falhar com 0x80073CF3.
+        try {
+            Add-AppxPackage -RegisterByFamilyName -MainPackage Microsoft.DesktopAppInstaller_8wekyb3d8bbwe -ErrorAction Stop
+            $windowsApps = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps'
+            if ($env:Path -notlike "*$windowsApps*") { $env:Path = "$env:Path;$windowsApps" }
+        } catch {
+            Write-Output ("ERRO: o App Installer nao registrou para este usuario. {0}" -f $_.Exception.Message)
+            return
+        }
+
+        if (Get-Winget) { Write-Output "OK: Winget instalado e disponivel para este usuario." }
+        else {
+            Write-Output "ERRO: o App Installer foi registrado, mas o alias winget.exe nao apareceu para este usuario."
+            $aliasPath = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\winget.exe'
+            Write-Output ("DIAGNOSTICO: alias={0}; caminho={1}" -f (Test-Path $aliasPath), $aliasPath)
+            try {
+                $appx = @(Get-AppxPackage -AllUsers -Name 'Microsoft.DesktopAppInstaller' -ErrorAction Stop)
+                if ($appx.Count -eq 0) { Write-Output "DIAGNOSTICO: pacote App Installer nao esta registrado para nenhum usuario." }
+                foreach ($pkg in $appx) {
+                    Write-Output ("DIAGNOSTICO: Appx Version={0}; Status={1}; InstallLocation={2}; Users={3}" -f
+                        $pkg.Version, $pkg.Status, $pkg.InstallLocation, (($pkg.PackageUserInformation | ForEach-Object { $_.UserSecurityId }) -join ','))
+                }
+            } catch { Write-Output ("DIAGNOSTICO: Get-AppxPackage falhou. {0}" -f $_.Exception.Message) }
+            try {
+                $provisioned = @(Get-AppxProvisionedPackage -Online -ErrorAction Stop | Where-Object { $_.DisplayName -eq 'Microsoft.DesktopAppInstaller' })
+                foreach ($pkg in $provisioned) { Write-Output ("DIAGNOSTICO: provisionado Version={0}; PackageName={1}" -f $pkg.Version, $pkg.PackageName) }
+            } catch { Write-Output ("DIAGNOSTICO: Get-AppxProvisionedPackage falhou. {0}" -f $_.Exception.Message) }
+        }
 '@)
 
     $nvidiaScript = [scriptblock]::Create($jobPreamble + @'
