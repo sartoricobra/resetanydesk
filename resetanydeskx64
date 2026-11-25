@@ -1,6 +1,91 @@
 # Tudo o que precisa de administrador fica neste bloco. Ele roda direto quando a sessão já é
 # elevada; caso contrário é reaberto como administrador a partir de um arquivo .ps1.
 $resetAnyDesk = {
+    # Instalador usado na opção de reinstalação: AnyDesk 7.0.4, hospedado neste repositório.
+    # Ao trocar o arquivo, atualize também o SHA-256 (o download é recusado se não conferir).
+    $installerUrl    = "https://raw.githubusercontent.com/sartoricobra/resetanydesk/main/00-anydesk.exe"
+    $installerSha256 = "FA0F2E683C50D4908381E6EF16EDCEC29CC3F1D225B63DE58F83D1C9BD854FF9"
+    $installDir      = "C:\Program Files (x86)\AnyDesk"
+
+    # Caminhos possíveis do AnyDesk
+    $anydeskPaths = @("C:\Program Files\AnyDesk\AnyDesk.exe", "C:\Program Files (x86)\AnyDesk\AnyDesk.exe")
+
+    # Pergunta o que fazer. Os textos exibidos ficam sem acento porque o Windows PowerShell 5.1
+    # lê este arquivo (UTF-8 sem BOM) como ANSI quando ele é executado como .ps1 local.
+    Write-Host ""
+    Write-Host "O que deseja fazer com o AnyDesk?"
+    Write-Host "  1 - Apenas limpeza (mantem a versao instalada)"
+    Write-Host "  2 - Reinstalacao (remove a versao atual e instala a 7.0.4)"
+    do {
+        $resposta = Read-Host "Digite 1 ou 2"
+        # Sem console para responder (entrada encerrada), Read-Host devolve nulo: sai sem alterar
+        # nada, em vez de repetir a pergunta para sempre.
+        if ($null -eq $resposta) {
+            Write-Host "Nenhuma opcao informada. Nada foi alterado."
+            return
+        }
+        $opcao = ([string]$resposta).Trim()
+    } until ($opcao -in @("1", "2"))
+
+    if ($opcao -eq "2") {
+        $installerPath = Join-Path $env:TEMP ("anydesk_{0}.exe" -f [Guid]::NewGuid().ToString("N"))
+        try {
+            # Baixa e confere o instalador ANTES de remover qualquer coisa: se o download falhar
+            # ou o arquivo não for o esperado, a instalação atual fica como está.
+            Write-Host "Baixando o instalador do AnyDesk 7.0.4..."
+            [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+            $ProgressPreference = "SilentlyContinue"
+            Invoke-WebRequest -Uri $installerUrl -OutFile $installerPath -UseBasicParsing -ErrorAction Stop
+            $hash = (Get-FileHash -LiteralPath $installerPath -Algorithm SHA256).Hash
+            if ($hash -ne $installerSha256) {
+                throw "o arquivo baixado nao e o instalador esperado (SHA-256 $hash)."
+            }
+
+            # Desinstala a versão atual, onde quer que esteja
+            foreach ($path in $anydeskPaths) {
+                if (Test-Path $path) {
+                    Write-Host "Desinstalando AnyDesk de $path"
+                    $processo = Start-Process -FilePath $path -ArgumentList "--remove --silent" -PassThru
+                    [void]$processo.WaitForExit(120000)
+                    # A remoção pode terminar depois que o processo sai: aguarda o executável sumir
+                    for ($i = 0; $i -lt 30 -and (Test-Path $path); $i++) { Start-Sleep -Seconds 2 }
+                }
+            }
+
+            # Finaliza o que tiver sobrado e limpa C:\ProgramData\AnyDesk
+            Get-Process -Name "AnyDesk" -ErrorAction SilentlyContinue | Stop-Process -Force
+            Start-Sleep -Seconds 2
+            Remove-Item -Path "C:\ProgramData\AnyDesk\*" -Recurse -Force -ErrorAction SilentlyContinue
+
+            # Instala em modo silencioso, com a atualização automática desativada para a máquina
+            # permanecer na 7.0.4
+            Write-Host "Instalando AnyDesk 7.0.4 em $installDir"
+            $argumentos = "--install `"$installDir`" --start-with-win --create-shortcuts --create-desktop-icon --update-disabled --silent"
+            $processo = Start-Process -FilePath $installerPath -ArgumentList $argumentos -PassThru
+            [void]$processo.WaitForExit(180000)
+
+            $instalado = Join-Path $installDir "AnyDesk.exe"
+            for ($i = 0; $i -lt 15 -and -not (Test-Path $instalado); $i++) { Start-Sleep -Seconds 2 }
+            if (-not (Test-Path $instalado)) {
+                throw "o instalador foi executado, mas $instalado nao foi encontrado."
+            }
+
+            Write-Host "Iniciando AnyDesk em $instalado"
+            Start-Process -FilePath $instalado
+            Write-Host "Reinstalacao concluida."
+        }
+        catch {
+            Write-Host "ERRO na reinstalacao: $($_.Exception.Message)" -ForegroundColor Red
+            [void](Read-Host "Pressione Enter para sair")
+        }
+        finally {
+            Remove-Item -LiteralPath $installerPath -Force -ErrorAction SilentlyContinue
+        }
+        return
+    }
+
+    # --- Apenas limpeza ---
+
     # Finaliza todos os processos do AnyDesk
     Get-Process -Name "AnyDesk" -ErrorAction SilentlyContinue | Stop-Process -Force
 
@@ -12,9 +97,6 @@ $resetAnyDesk = {
 
     # Aguarda um curto período antes de reiniciar o AnyDesk
     Start-Sleep -Seconds 2
-
-    # Caminhos possíveis do AnyDesk
-    $anydeskPaths = @("C:\Program Files\AnyDesk\AnyDesk.exe", "C:\Program Files (x86)\AnyDesk\AnyDesk.exe")
 
     # Tenta executar o AnyDesk a partir dos caminhos conhecidos
     $anydeskFound = $false
