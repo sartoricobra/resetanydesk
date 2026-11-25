@@ -127,8 +127,14 @@
         e uma unica nova tentativa. Se persistir, o log identifica indisponibilidade da API,
         sem atribuir a falha a conta ou instalacao local da Store.
 
+    Versao 16.17:
+      - Elevacao via "irm | iex" deixa de reabrir o PowerShell com "-Command irm <url> | iex".
+        O Microsoft Defender detectava essa linha de comando (Trojan:Win32/Commando.A!ml) e
+        encerrava o processo elevado, entao a janela nunca abria. O script agora e baixado
+        para um arquivo temporario e reaberto com -File, como na execucao local.
+
 .VERSION
-    16.16
+    16.17
 #>
 #endregion
 
@@ -136,12 +142,13 @@
 # CONFIGURACAO
 # ---------------------------------------------------------------------------------------------
 # URL usada no "irm <url> | iex". E dela que o script se rebaixa quando precisa de elevacao:
-# em vez de tentar recuperar o proprio codigo da memoria, ele simplesmente baixa de novo ja
-# como administrador. Se ficar vazia, cai no metodo alternativo (copia temporaria em disco).
+# sob "iex" ele nao consegue recuperar o proprio codigo da memoria, entao baixa de novo para um
+# arquivo temporario e reabre esse arquivo como administrador. Se ficar vazia, cai no metodo
+# alternativo (copia do codigo em memoria, que so funciona fora do "iex").
 $ScriptUrl = 'https://is.gd/posinstalador'
 
 $AppTitle   = 'Pos Instalador de Aplicativos'
-$AppVersion = '16.16'
+$AppVersion = '16.17'
 
 #region ELEVACAO
 # Forca TLS 1.2 (necessario em instalacoes antigas do Windows para baixar de HTTPS)
@@ -156,8 +163,21 @@ if (-not $currentUser.IsInRole([Security.Principal.WindowsBuiltInRole]::Administ
         $relaunchArgs = $baseArgs + @('-File', ('"{0}"' -f $PSCommandPath))
     }
     elseif (-not [string]::IsNullOrWhiteSpace($ScriptUrl)) {
-        # Executando via "irm <url> | iex" e a URL foi informada: repete o download ja elevado
-        $relaunchArgs = $baseArgs + @('-Command', ("irm '{0}' | iex" -f $ScriptUrl))
+        # Executando via "irm <url> | iex" e a URL foi informada: baixa o script para um arquivo
+        # temporario e eleva com -File. A linha "-WindowStyle Hidden -Command irm <url> | iex" nao
+        # pode ser usada no processo elevado: o Microsoft Defender a classifica como
+        # Trojan:Win32/Commando.A!ml e encerra o processo antes de a janela aparecer.
+        $tempScriptPath = Join-Path $env:TEMP ('posinstalador_{0}.ps1' -f ([Guid]::NewGuid().ToString('N')))
+        try {
+            $code = [string](Invoke-RestMethod -Uri $ScriptUrl -UseBasicParsing -ErrorAction Stop)
+            if ([string]::IsNullOrWhiteSpace($code)) { throw 'o endereco respondeu sem conteudo.' }
+            [IO.File]::WriteAllText($tempScriptPath, $code, (New-Object Text.UTF8Encoding($true)))
+        } catch {
+            Write-Warning ("Nao foi possivel baixar o script para elevar: {0}" -f $_.Exception.Message)
+            Write-Warning 'Abra o PowerShell como Administrador e execute novamente.'
+            return
+        }
+        $relaunchArgs = $baseArgs + @('-File', ('"{0}"' -f $tempScriptPath))
     }
     else {
         # Executando via "irm | iex" sem URL configurada: grava o proprio codigo em arquivo temporario

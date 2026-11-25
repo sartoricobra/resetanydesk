@@ -1,59 +1,76 @@
-# Solicita elevação se não estiver em modo administrador
-if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    Start-Process -FilePath "powershell.exe" -ArgumentList "-ExecutionPolicy Bypass -File `"$PSCommandPath`"" -Verb RunAs
-    exit
-}
+# Tudo o que precisa de administrador fica neste bloco. Ele roda direto quando a sessão já é
+# elevada; caso contrário é reaberto como administrador a partir de um arquivo .ps1.
+$resetAnyDesk = {
+    # Finaliza todos os processos do AnyDesk
+    Get-Process -Name "AnyDesk" -ErrorAction SilentlyContinue | Stop-Process -Force
 
-# Finaliza todos os processos do AnyDesk
-Get-Process -Name "AnyDesk" -ErrorAction SilentlyContinue | Stop-Process -Force
+    # Aguarda um curto período para garantir que os processos foram encerrados
+    Start-Sleep -Seconds 2
 
-# Aguarda um curto período para garantir que os processos foram encerrados
-Start-Sleep -Seconds 2
+    # Remove todos os arquivos e subpastas dentro de C:\ProgramData\AnyDesk
+    Remove-Item -Path "C:\ProgramData\AnyDesk\*" -Recurse -Force -ErrorAction SilentlyContinue
 
-# Remove todos os arquivos e subpastas dentro de C:\ProgramData\AnyDesk
-Remove-Item -Path "C:\ProgramData\AnyDesk\*" -Recurse -Force -ErrorAction SilentlyContinue
+    # Aguarda um curto período antes de reiniciar o AnyDesk
+    Start-Sleep -Seconds 2
 
-# Aguarda um curto período antes de reiniciar o AnyDesk
-Start-Sleep -Seconds 2
+    # Caminhos possíveis do AnyDesk
+    $anydeskPaths = @("C:\Program Files\AnyDesk\AnyDesk.exe", "C:\Program Files (x86)\AnyDesk\AnyDesk.exe")
 
-# Caminhos possíveis do AnyDesk
-$anydeskPaths = @("C:\Program Files\AnyDesk\AnyDesk.exe", "C:\Program Files (x86)\AnyDesk\AnyDesk.exe")
+    # Tenta executar o AnyDesk a partir dos caminhos conhecidos
+    $anydeskFound = $false
+    foreach ($path in $anydeskPaths) {
+        if (Test-Path $path) {
+            Write-Host "Iniciando AnyDesk em $path"
+            Start-Process -FilePath $path
+            $anydeskFound = $true
+            break
+        }
+    }
 
-# Tenta executar o AnyDesk a partir dos caminhos conhecidos
-$anydeskFound = $false
-foreach ($path in $anydeskPaths) {
-    if (Test-Path $path) {
-        Write-Host "Iniciando AnyDesk em $path"
-        Start-Process -FilePath $path
-        $anydeskFound = $true
-        break
+    if (-not $anydeskFound) {
+        Write-Host "Nenhuma instalação do AnyDesk foi encontrada."
+    }
+
+    # Aguarda um curto período para garantir que os processos foram iniciados
+    Start-Sleep -Seconds 5
+
+    # Finaliza todos os processos do AnyDesk novamente
+    Get-Process -Name "AnyDesk" -ErrorAction SilentlyContinue | Stop-Process -Force
+
+    # Aguarda um curto período para garantir que os processos foram encerrados
+    Start-Sleep -Seconds 2
+
+    # Reinicia o AnyDesk a partir do caminho encontrado
+    $anydeskFound = $false
+    foreach ($path in $anydeskPaths) {
+        if (Test-Path $path) {
+            Write-Host "Reiniciando AnyDesk em $path"
+            Start-Process -FilePath $path
+            $anydeskFound = $true
+            break
+        }
+    }
+
+    if (-not $anydeskFound) {
+        Write-Host "Nenhuma instalação do AnyDesk foi encontrada."
     }
 }
 
-if (-not $anydeskFound) {
-    Write-Host "Nenhuma instalação do AnyDesk foi encontrada."
+# Já está em modo administrador: executa direto
+if (([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    & $resetAnyDesk
+    return
 }
 
-# Aguarda um curto período para garantir que os processos foram iniciados
-Start-Sleep -Seconds 5
-
-# Finaliza todos os processos do AnyDesk novamente
-Get-Process -Name "AnyDesk" -ErrorAction SilentlyContinue | Stop-Process -Force
-
-# Aguarda um curto período para garantir que os processos foram encerrados
-Start-Sleep -Seconds 2
-
-# Reinicia o AnyDesk a partir do caminho encontrado
-$anydeskFound = $false
-foreach ($path in $anydeskPaths) {
-    if (Test-Path $path) {
-        Write-Host "Reiniciando AnyDesk em $path"
-        Start-Process -FilePath $path
-        $anydeskFound = $true
-        break
-    }
+# Solicita elevação. Via "irm <url> | iex" não existe arquivo em disco ($PSCommandPath fica vazio),
+# então o bloco acima é gravado em um .ps1 temporário, que se apaga ao terminar.
+if ($PSCommandPath) {
+    $scriptPath = $PSCommandPath
+}
+else {
+    $scriptPath = Join-Path $env:TEMP ("resetanydesk_{0}.ps1" -f [Guid]::NewGuid().ToString("N"))
+    $conteudo = $resetAnyDesk.ToString() + "`r`nRemove-Item -LiteralPath `$PSCommandPath -Force -ErrorAction SilentlyContinue`r`n"
+    [IO.File]::WriteAllText($scriptPath, $conteudo, (New-Object Text.UTF8Encoding($true)))
 }
 
-if (-not $anydeskFound) {
-    Write-Host "Nenhuma instalação do AnyDesk foi encontrada."
-}
+Start-Process -FilePath "powershell.exe" -ArgumentList "-ExecutionPolicy Bypass -File `"$scriptPath`"" -Verb RunAs
