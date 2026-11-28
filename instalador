@@ -133,8 +133,23 @@
         encerrava o processo elevado, entao a janela nunca abria. O script agora e baixado
         para um arquivo temporario e reaberto com -File, como na execucao local.
 
+    Versao 16.18 - nova interface:
+      - Tres faixas: barra lateral (navegacao Programas / Drivers e ferramentas, selecao
+        rapida e situacao do Winget, Chocolatey e fila), pagina atual e uma coluna fixa de
+        execucao com o botao INSTALAR, o progresso e um registro bem maior. A divisoria
+        entre a pagina e o registro e arrastavel.
+      - Programas em cartoes por categoria, com um interruptor por item no lugar dos chips.
+        Drivers e ferramentas ganharam pagina propria, com a descricao de cada item.
+      - Controles desenhados em C# (cartao, botao, interruptor e barra de progresso) com
+        anti-aliasing; barra de titulo e barras de rolagem escuras. Tema monocromatico.
+      - Textos da interface com acento, escritos como \uXXXX para o arquivo seguir em ASCII.
+      - Registro: o progresso de uma instalacao volta a ocupar uma unica linha. A troca da
+        linha era ignorada em silencio porque a caixa e somente leitura, e cada percentual
+        virava uma linha nova. O progresso tambem passou a ser reconhecido por blocos de
+        barra e por "baixado / total", nao so pelo sinal de percentual.
+
 .VERSION
-    16.17
+    16.18
 #>
 #endregion
 
@@ -147,8 +162,9 @@
 # alternativo (copia do codigo em memoria, que so funciona fora do "iex").
 $ScriptUrl = 'https://is.gd/posinstalador'
 
-$AppTitle   = 'Pos Instalador de Aplicativos'
-$AppVersion = '16.17'
+# O arquivo segue em ASCII puro; o acento do titulo vem do escape \u00f3.
+$AppTitle   = [regex]::Unescape('P\u00f3s Instalador de Aplicativos')
+$AppVersion = '16.18'
 
 #region ELEVACAO
 # Forca TLS 1.2 (necessario em instalacoes antigas do Windows para baixar de HTTPS)
@@ -295,29 +311,354 @@ public static extern bool SetProcessDPIAware();
     }
     #endregion
 
+    #region CONTROLES PERSONALIZADOS
+    # O arquivo precisa continuar em ASCII puro (ele e avaliado por "irm | iex"), entao os
+    # textos da interface com acento sao escritos com \uXXXX e convertidos aqui.
+    function U {
+        param([string]$Text)
+        return [regex]::Unescape($Text)
+    }
+
+    # Controles desenhados a mao, com anti-aliasing: cartao arredondado, botao, interruptor e
+    # barra de progresso. O WinForms nativo nao oferece raio de canto nem interruptor, e o
+    # recorte por Region (Set-Rounded) deixa as quinas serrilhadas. Codigo em C# 5, que e o
+    # que o compilador do Windows PowerShell 5.1 aceita. Ao alterar este bloco, troque o
+    # sufixo do namespace: um tipo ja carregado na sessao nao pode ser recompilado.
+    $uiSource = @'
+using System;
+using System.Drawing;
+using System.Drawing.Drawing2D;
+using System.Runtime.InteropServices;
+using System.Windows.Forms;
+
+namespace PosInstUI1
+{
+    public static class Ui
+    {
+        public static float Scale = 1f;
+
+        public static int S(float v) { return (int)Math.Round(v * Scale); }
+
+        public static GraphicsPath RoundPath(RectangleF r, float radius)
+        {
+            GraphicsPath p = new GraphicsPath();
+            float d = Math.Max(1f, Math.Min(radius * 2f, Math.Min(r.Width, r.Height)));
+            p.AddArc(r.X, r.Y, d, d, 180, 90);
+            p.AddArc(r.Right - d, r.Y, d, d, 270, 90);
+            p.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
+            p.AddArc(r.X, r.Bottom - d, d, d, 90, 90);
+            p.CloseFigure();
+            return p;
+        }
+
+        public static void RoundRect(Graphics g, int w, int h, float radius, Color fill, Color border)
+        {
+            if (w < 2 || h < 2) return;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            RectangleF r = new RectangleF(0.5f, 0.5f, w - 1f, h - 1f);
+            using (GraphicsPath p = RoundPath(r, radius))
+            {
+                if (fill.A > 0) { using (SolidBrush b = new SolidBrush(fill)) { g.FillPath(b, p); } }
+                if (border.A > 0) { using (Pen pen = new Pen(border, 1f)) { g.DrawPath(pen, p); } }
+            }
+            g.SmoothingMode = SmoothingMode.Default;
+        }
+
+        [DllImport("dwmapi.dll")]
+        static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);
+
+        [DllImport("uxtheme.dll", CharSet = CharSet.Unicode)]
+        static extern int SetWindowTheme(IntPtr hwnd, string app, string id);
+
+        // Barra de titulo escura (Windows 10 2004+ usa o atributo 20; versoes anteriores, o 19).
+        public static void DarkTitleBar(IntPtr hwnd)
+        {
+            try
+            {
+                int on = 1;
+                if (DwmSetWindowAttribute(hwnd, 20, ref on, 4) != 0) { DwmSetWindowAttribute(hwnd, 19, ref on, 4); }
+            }
+            catch { }
+        }
+
+        // Barras de rolagem escuras em paineis e na caixa do registro.
+        public static void DarkScrollBars(IntPtr hwnd)
+        {
+            try { SetWindowTheme(hwnd, "DarkMode_Explorer", null); } catch { }
+        }
+    }
+
+    public class Card : Panel
+    {
+        public Color Fill = Color.FromArgb(16, 16, 16);
+        public Color Border = Color.FromArgb(34, 34, 34);
+        public int Radius = 12;
+
+        public Card()
+        {
+            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+        }
+
+        protected override void OnPaintBackground(PaintEventArgs e) { }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            e.Graphics.Clear(BackColor);
+            Ui.RoundRect(e.Graphics, Width, Height, Ui.S(Radius), Fill, Border);
+        }
+    }
+
+    public class Btn : Button
+    {
+        public Color Fill = Color.FromArgb(22, 22, 22);
+        public Color FillHover = Color.FromArgb(30, 30, 30);
+        public Color FillDown = Color.FromArgb(40, 40, 40);
+        public Color Border = Color.FromArgb(46, 46, 46);
+        public Color Fore = Color.FromArgb(237, 237, 237);
+        public Color FillOff = Color.FromArgb(16, 16, 16);
+        public Color ForeOff = Color.FromArgb(105, 105, 105);
+        public Color BorderOff = Color.FromArgb(30, 30, 30);
+        public Color FillOn = Color.FromArgb(28, 28, 28);
+        public Color ForeOn = Color.White;
+        public Color BorderOn = Color.Empty;
+        public int Radius = 8;
+        public int PadX = 12;
+        public bool AlignLeft = false;
+        bool hover, down, active;
+
+        public bool Active
+        {
+            get { return active; }
+            set { if (active != value) { active = value; Invalidate(); } }
+        }
+
+        public Btn()
+        {
+            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+            FlatStyle = FlatStyle.Flat;
+            Cursor = Cursors.Hand;
+        }
+
+        protected override void OnMouseEnter(EventArgs e) { hover = true; Invalidate(); base.OnMouseEnter(e); }
+        protected override void OnMouseLeave(EventArgs e) { hover = false; down = false; Invalidate(); base.OnMouseLeave(e); }
+        protected override void OnMouseDown(MouseEventArgs e) { down = true; Invalidate(); base.OnMouseDown(e); }
+        protected override void OnMouseUp(MouseEventArgs e) { down = false; Invalidate(); base.OnMouseUp(e); }
+        protected override void OnEnabledChanged(EventArgs e) { hover = false; down = false; Invalidate(); base.OnEnabledChanged(e); }
+        protected override void OnTextChanged(EventArgs e) { Invalidate(); base.OnTextChanged(e); }
+        protected override void OnGotFocus(EventArgs e) { Invalidate(); base.OnGotFocus(e); }
+        protected override void OnLostFocus(EventArgs e) { Invalidate(); base.OnLostFocus(e); }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Graphics g = e.Graphics;
+            g.Clear(BackColor);
+
+            Color fill = Fill, fore = Fore, border = Border;
+            if (!Enabled) { fill = FillOff; fore = ForeOff; border = BorderOff; }
+            else if (active) { fill = FillOn; fore = ForeOn; border = BorderOn; }
+            else if (down) { fill = FillDown; }
+            else if (hover) { fill = FillHover; }
+
+            // Foco pelo teclado: a borda fica mais clara.
+            if (Enabled && Focused && ShowFocusCues) { border = Color.FromArgb(150, 150, 150); }
+
+            Ui.RoundRect(g, Width, Height, Ui.S(Radius), fill, border);
+
+            int pad = Ui.S(PadX);
+            Rectangle r = new Rectangle(pad, 0, Math.Max(1, Width - 2 * pad), Height);
+            TextFormatFlags f = TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding;
+            f |= AlignLeft ? TextFormatFlags.Left : TextFormatFlags.HorizontalCenter;
+            TextRenderer.DrawText(g, Text, Font, r, fore, f);
+        }
+    }
+
+    public class Toggle : Control
+    {
+        public Color Accent = Color.White;
+        public Color TrackOff = Color.FromArgb(42, 42, 42);
+        public Color KnobOn = Color.FromArgb(10, 10, 10);
+        public Color KnobOff = Color.FromArgb(140, 140, 140);
+        public Color ForeOn = Color.White;
+        public Color ForeOff = Color.FromArgb(181, 181, 181);
+        public Color TagColor = Color.FromArgb(140, 140, 140);
+        public Color HoverFill = Color.FromArgb(26, 26, 26);
+        public string TagText = "";
+        public Font TagFont = null;
+        bool on, hover;
+
+        public event EventHandler CheckedChanged;
+
+        public bool Checked
+        {
+            get { return on; }
+            set
+            {
+                if (on == value) return;
+                on = value;
+                Invalidate();
+                EventHandler h = CheckedChanged;
+                if (h != null) h(this, EventArgs.Empty);
+            }
+        }
+
+        public Toggle()
+        {
+            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw | ControlStyles.Selectable | ControlStyles.StandardClick, true);
+            // Sem duplo clique: dois cliques rapidos alternam duas vezes, como em um interruptor.
+            SetStyle(ControlStyles.StandardDoubleClick, false);
+            Cursor = Cursors.Hand;
+            TabStop = true;
+        }
+
+        protected override void OnClick(EventArgs e) { Checked = !Checked; base.OnClick(e); }
+        protected override void OnMouseDown(MouseEventArgs e) { Focus(); base.OnMouseDown(e); }
+        protected override void OnMouseEnter(EventArgs e) { hover = true; Invalidate(); base.OnMouseEnter(e); }
+        protected override void OnMouseLeave(EventArgs e) { hover = false; Invalidate(); base.OnMouseLeave(e); }
+        protected override void OnEnabledChanged(EventArgs e) { hover = false; Invalidate(); base.OnEnabledChanged(e); }
+        protected override void OnTextChanged(EventArgs e) { Invalidate(); base.OnTextChanged(e); }
+        protected override void OnGotFocus(EventArgs e) { Invalidate(); base.OnGotFocus(e); }
+        protected override void OnLostFocus(EventArgs e) { Invalidate(); base.OnLostFocus(e); }
+
+        protected override void OnKeyDown(KeyEventArgs e)
+        {
+            if (e.KeyCode == Keys.Space) { Checked = !Checked; e.Handled = true; }
+            base.OnKeyDown(e);
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Graphics g = e.Graphics;
+            g.Clear(BackColor);
+
+            bool focusCue = Enabled && Focused && ShowFocusCues;
+            if ((hover && Enabled) || focusCue)
+            {
+                Ui.RoundRect(g, Width, Height, Ui.S(7), HoverFill, focusCue ? Color.FromArgb(110, 110, 110) : Color.Empty);
+            }
+
+            int tw = Ui.S(30), th = Ui.S(16);
+            int x = Ui.S(6), y = (Height - th) / 2;
+            Color track = on ? Accent : TrackOff;
+            Color knob = on ? KnobOn : KnobOff;
+            Color fore = on ? ForeOn : ForeOff;
+            if (!Enabled)
+            {
+                track = on ? Color.FromArgb(120, 120, 120) : Color.FromArgb(34, 34, 34);
+                knob = on ? KnobOn : Color.FromArgb(90, 90, 90);
+                fore = on ? Color.FromArgb(170, 170, 170) : Color.FromArgb(120, 120, 120);
+            }
+
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            using (GraphicsPath p = Ui.RoundPath(new RectangleF(x, y, tw, th), th / 2f))
+            using (SolidBrush b = new SolidBrush(track)) { g.FillPath(b, p); }
+            float inset = Ui.S(2);
+            float k = th - 2f * inset;
+            float kx = on ? x + tw - k - inset : x + inset;
+            using (SolidBrush b = new SolidBrush(knob)) { g.FillEllipse(b, kx, y + inset, k, k); }
+            g.SmoothingMode = SmoothingMode.Default;
+
+            int tx = x + tw + Ui.S(10);
+            int right = Width - Ui.S(8);
+            TextFormatFlags f = TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding;
+
+            if (!string.IsNullOrEmpty(TagText))
+            {
+                Font tf = TagFont ?? Font;
+                int tagW = TextRenderer.MeasureText(g, TagText, tf, new Size(int.MaxValue, Height), f).Width;
+                Rectangle tr = new Rectangle(right - tagW, 0, tagW, Height);
+                TextRenderer.DrawText(g, TagText, tf, tr, TagColor, f);
+                right -= tagW + Ui.S(8);
+            }
+
+            Rectangle r = new Rectangle(tx, 0, Math.Max(1, right - tx), Height);
+            TextRenderer.DrawText(g, Text, Font, r, fore, f | TextFormatFlags.Left);
+        }
+    }
+
+    public class Bar : Control
+    {
+        public Color Track = Color.FromArgb(38, 38, 38);
+        public Color FillColor = Color.White;
+        int min = 0, max = 1, val = 0;
+
+        public int Minimum { get { return min; } set { min = value; Invalidate(); } }
+        public int Maximum { get { return max; } set { max = value; Invalidate(); } }
+        public int Value
+        {
+            get { return val; }
+            set { val = Math.Max(min, Math.Min(max, value)); Invalidate(); }
+        }
+
+        public Bar()
+        {
+            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Graphics g = e.Graphics;
+            g.Clear(BackColor);
+            if (Width < 2 || Height < 2) return;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            float radius = Height / 2f;
+            using (GraphicsPath p = Ui.RoundPath(new RectangleF(0, 0, Width, Height), radius))
+            using (SolidBrush b = new SolidBrush(Track)) { g.FillPath(b, p); }
+
+            float frac = (max > min) ? (val - min) / (float)(max - min) : 0f;
+            float w = Width * Math.Max(0f, Math.Min(1f, frac));
+            if (w >= 1f)
+            {
+                w = Math.Max(w, Height);
+                using (GraphicsPath p = Ui.RoundPath(new RectangleF(0, 0, w, Height), radius))
+                using (SolidBrush b = new SolidBrush(FillColor)) { g.FillPath(b, p); }
+            }
+        }
+    }
+}
+'@
+
+    if (-not ('PosInstUI1.Ui' -as [type])) {
+        $uiRefs = @('System.Windows.Forms', 'System.Drawing')
+        if ($PSVersionTable.PSEdition -eq 'Core') {
+            # No PowerShell 7 os tipos ficam espalhados em varios assemblies; referencia os que
+            # ja estao carregados pelo caminho real.
+            $uiRefs = @(
+                [Windows.Forms.Form], [Windows.Forms.TextRenderer], [Drawing.Color], [Drawing.Graphics],
+                [Drawing.Drawing2D.GraphicsPath], [ComponentModel.Component], [Runtime.InteropServices.DllImportAttribute]
+            ) | ForEach-Object { $_.Assembly.Location } | Select-Object -Unique
+        }
+        Add-Type -TypeDefinition $uiSource -ReferencedAssemblies $uiRefs -ErrorAction Stop
+    }
+    [PosInstUI1.Ui]::Scale = [single]$script:DpiScale
+    #endregion
+
     #region TEMA
+    # Paleta monocromatica: preto, cinzas e o branco como unica cor de destaque.
     $Theme = @{
-        Bg          = [Drawing.Color]::FromArgb(15, 23, 42)
-        HeaderBg    = [Drawing.Color]::FromArgb(11, 17, 32)
-        HeaderFg    = [Drawing.Color]::FromArgb(248, 250, 252)
-        HeaderDim   = [Drawing.Color]::FromArgb(148, 163, 184)
-        PanelBg     = [Drawing.Color]::FromArgb(30, 41, 59)
-        Border      = [Drawing.Color]::FromArgb(51, 65, 85)
-        Text        = [Drawing.Color]::FromArgb(226, 232, 240)
-        ChipBg      = [Drawing.Color]::FromArgb(30, 41, 59)
-        ChipBorder  = [Drawing.Color]::FromArgb(71, 85, 105)
-        ChipOn      = [Drawing.Color]::FromArgb(6, 78, 59)
-        ChipOnBrd   = [Drawing.Color]::FromArgb(52, 211, 153)
-        ChipHover   = [Drawing.Color]::FromArgb(51, 65, 85)
+        Bg          = [Drawing.Color]::FromArgb(10, 10, 10)
+        Card        = [Drawing.Color]::FromArgb(16, 16, 16)
+        CardBorder  = [Drawing.Color]::FromArgb(34, 34, 34)
+        Line        = [Drawing.Color]::FromArgb(28, 28, 28)
+        Field       = [Drawing.Color]::FromArgb(17, 17, 17)
+        Text        = [Drawing.Color]::FromArgb(237, 237, 237)
+        Sub         = [Drawing.Color]::FromArgb(181, 181, 181)
+        Dim         = [Drawing.Color]::FromArgb(140, 140, 140)
+        Accent      = [Drawing.Color]::FromArgb(255, 255, 255)
+        AccentHover = [Drawing.Color]::FromArgb(226, 226, 226)
+        AccentDown  = [Drawing.Color]::FromArgb(200, 200, 200)
+        AccentText  = [Drawing.Color]::FromArgb(10, 10, 10)
+        Hover       = [Drawing.Color]::FromArgb(24, 24, 24)
+        Down        = [Drawing.Color]::FromArgb(36, 36, 36)
+        NavOn       = [Drawing.Color]::FromArgb(28, 28, 28)
+        # Usadas tambem pelo modal de drivers
+        PanelBg     = [Drawing.Color]::FromArgb(28, 28, 28)
+        Border      = [Drawing.Color]::FromArgb(46, 46, 46)
         Green       = [Drawing.Color]::FromArgb(5, 150, 105)
-        GreenLight  = [Drawing.Color]::FromArgb(52, 211, 153)
         Red         = [Drawing.Color]::FromArgb(190, 24, 60)
-        Orange      = [Drawing.Color]::FromArgb(180, 83, 9)
-        Nvidia      = [Drawing.Color]::FromArgb(101, 163, 13)
-        Amd         = [Drawing.Color]::FromArgb(190, 24, 60)
-        LogBg       = [Drawing.Color]::FromArgb(24, 24, 27)
+        # Registro
+        LogBg       = [Drawing.Color]::FromArgb(0, 0, 0)
         LogFg       = [Drawing.Color]::FromArgb(228, 228, 231)
-        LogDim      = [Drawing.Color]::FromArgb(113, 113, 122)
+        LogDim      = [Drawing.Color]::FromArgb(140, 140, 140)
         LogGreen    = [Drawing.Color]::FromArgb(74, 222, 128)
         LogRed      = [Drawing.Color]::FromArgb(248, 113, 113)
         LogAmber    = [Drawing.Color]::FromArgb(251, 191, 36)
@@ -325,7 +666,12 @@ public static extern bool SetProcessDPIAware();
     }
     $FontUI     = New-Object Drawing.Font('Segoe UI', 9)
     $FontUIBold = New-Object Drawing.Font('Segoe UI', 9, [Drawing.FontStyle]::Bold)
-    $FontChip   = New-Object Drawing.Font('Segoe UI', 8.25)
+    $FontSmall  = New-Object Drawing.Font('Segoe UI', 8)
+    $FontCaps   = New-Object Drawing.Font('Segoe UI', 7.5, [Drawing.FontStyle]::Bold)
+    $FontBrand  = New-Object Drawing.Font('Segoe UI', 9.75, [Drawing.FontStyle]::Bold)
+    $FontBig    = New-Object Drawing.Font('Segoe UI', 9.75, [Drawing.FontStyle]::Bold)
+    $FontTitle  = New-Object Drawing.Font('Segoe UI Semibold', 16)
+    $FontMono   = New-Object Drawing.Font('Consolas', 8.5)
     $FontLog    = New-Object Drawing.Font('Consolas', 9)
     #endregion
 
@@ -437,6 +783,9 @@ public static extern bool SetProcessDPIAware();
     #endregion
 
     #region JANELA E ESTRUTURA PRINCIPAL
+    # Tres faixas, da esquerda para a direita:
+    #   barra lateral (navegacao, selecao rapida, ambiente) | pagina atual | execucao e registro
+    # A divisoria entre a pagina e o painel de execucao e arrastavel.
     $mainForm = New-Object Windows.Forms.Form
     $mainForm.Text            = "$AppTitle v$AppVersion  -  Administrador"
     $mainForm.StartPosition   = 'CenterScreen'
@@ -447,392 +796,517 @@ public static extern bool SetProcessDPIAware();
     $mainForm.Font            = $FontUI
     $mainForm.BackColor       = $Theme.Bg
     $mainForm.ForeColor       = $Theme.Text
-    $mainForm.ClientSize      = New-Object Drawing.Size((Px 1120), (Px 720))
-    $mainForm.MinimumSize     = New-Object Drawing.Size((Px 820), (Px 560))
+    $mainForm.ClientSize      = New-Object Drawing.Size((Px 1320), (Px 780))
+    $mainForm.MinimumSize     = New-Object Drawing.Size((Px 980), (Px 600))
+    $mainForm.Add_HandleCreated({ [PosInstUI1.Ui]::DarkTitleBar($this.Handle) })
 
-    # --- Divisor principal: selecao (cima) x log (baixo) ---
-    $split = New-Object Windows.Forms.SplitContainer
-    $split.Dock            = 'Fill'
-    $split.Orientation     = 'Horizontal'
-    $split.SplitterWidth   = Px 7
-    $split.BackColor       = $Theme.Border
-    $split.Panel1MinSize   = Px 120
-    $split.Panel2MinSize   = Px 120
-    $split.FixedPanel      = 'None'
-    $split.Panel1.BackColor = $Theme.Bg
-    $split.Panel2.BackColor = $Theme.Bg
-    $split.Panel1.Padding  = New-Object Windows.Forms.Padding((Px 10), (Px 8), (Px 10), (Px 4))
-    $split.Panel2.Padding  = New-Object Windows.Forms.Padding((Px 10), (Px 4), (Px 10), (Px 6))
-
-    # --- Cabecalho ---
-    # Empilhado por FlowLayoutPanel com AutoSize: a altura vem da altura real do texto,
-    # em vez de coordenadas Y fixas que se sobrepoem quando a fonte cresce com o DPI.
-    $header = New-Object Windows.Forms.Panel
-    $header.Dock         = 'Top'
-    $header.AutoSize     = $true
-    $header.AutoSizeMode = 'GrowAndShrink'
-    $header.BackColor    = $Theme.HeaderBg
-    $header.Padding      = New-Object Windows.Forms.Padding((Px 14), (Px 7), (Px 14), (Px 7))
-
-    $headerStack = New-Object Windows.Forms.FlowLayoutPanel
-    $headerStack.Dock          = 'Top'
-    $headerStack.FlowDirection = 'TopDown'
-    $headerStack.WrapContents  = $false
-    $headerStack.AutoSize      = $true
-    $headerStack.AutoSizeMode  = 'GrowAndShrink'
-    $headerStack.Margin        = New-Object Windows.Forms.Padding(0)
-    $headerStack.Padding       = New-Object Windows.Forms.Padding(0)
-
-    $titleLabel = New-Object Windows.Forms.Label
-    $titleLabel.Text      = $AppTitle
-    $titleLabel.Font      = New-Object Drawing.Font('Segoe UI Semibold', 12)
-    $titleLabel.ForeColor = $Theme.HeaderFg
-    $titleLabel.AutoSize  = $true
-    $titleLabel.Margin    = New-Object Windows.Forms.Padding(0)
-
-    $subLabel = New-Object Windows.Forms.Label
-    $subLabel.Text      = "v$AppVersion   |   $env:COMPUTERNAME   |   executando como Administrador"
-    $subLabel.Font      = New-Object Drawing.Font('Segoe UI', 8)
-    $subLabel.ForeColor = $Theme.HeaderDim
-    $subLabel.AutoSize  = $true
-    $subLabel.Margin    = New-Object Windows.Forms.Padding((Px 2), (Px 1), 0, 0)
-
-    $headerStack.Controls.Add($titleLabel)
-    $headerStack.Controls.Add($subLabel)
-    $header.Controls.Add($headerStack)
-
-    # --- Barra inferior: progresso e acoes principais ---
-    $bottomBar = New-Object Windows.Forms.Panel
-    $bottomBar.Dock    = 'Bottom'
-    $bottomBar.BackColor = $Theme.Bg
-    $bottomBar.Height  = Px 58
-    $bottomBar.Padding = New-Object Windows.Forms.Padding((Px 10), (Px 6), (Px 10), (Px 10))
-
-    # A largura vem do texto medido na fonte real, com folga; nunca de um numero fixo.
-    $installButton = New-Object Windows.Forms.Button
-    $installButton.Text      = 'INSTALAR SELECIONADOS'
-    $installButton.Dock      = 'Right'
-    $installButton.Font      = $FontUIBold
-    $installButton.Width     = (Get-TextWidth $installButton.Text $FontUIBold) + (Px 30)
-    $installButton.FlatStyle = 'Flat'
-    $installButton.UseVisualStyleBackColor = $false
-    $installButton.FlatAppearance.BorderSize = 0
-    $installButton.BackColor = $Theme.Green
-    $installButton.ForeColor = [Drawing.Color]::White
-    $installButton.Cursor    = 'Hand'
-
-    $cancelButton = New-Object Windows.Forms.Button
-    $cancelButton.Text      = 'Cancelar'
-    $cancelButton.Dock      = 'Right'
-    $cancelButton.Font      = $FontUI
-    $cancelButton.Width     = (Get-TextWidth $cancelButton.Text $FontUI) + (Px 30)
-    $cancelButton.FlatStyle = 'Flat'
-    $cancelButton.UseVisualStyleBackColor = $false
-    $cancelButton.BackColor = $Theme.PanelBg
-    $cancelButton.FlatAppearance.BorderColor = $Theme.Border
-    $cancelButton.Enabled   = $false
-
-    Set-Rounded $installButton
-    Set-Rounded $cancelButton
-
-    # Controles em Dock ignoram Margin, por isso Cancelar e Instalar ficavam encostados.
-    # A separacao precisa vir de paineis vazios inseridos entre eles.
-    $gapCancelInstall = New-Object Windows.Forms.Panel
-    $gapCancelInstall.Dock  = 'Right'
-    $gapCancelInstall.Width = Px 12
-
-    $spacer = New-Object Windows.Forms.Panel
-    $spacer.Dock  = 'Right'
-    $spacer.Width = Px 18
-
-    $progressPanel = New-Object Windows.Forms.Panel
-    $progressPanel.Dock = 'Fill'
-
-    $statusLabel = New-Object Windows.Forms.Label
-    $statusLabel.Dock      = 'Top'
-    $statusLabel.Height    = $FontUI.Height + (Px 2)
-    $statusLabel.Text      = 'Pronto.'
-    $statusLabel.ForeColor = $Theme.Text
-    $statusLabel.TextAlign = 'MiddleLeft'
-    $statusLabel.AutoEllipsis = $true
-
-    $progressBar = New-Object Windows.Forms.ProgressBar
-    $progressBar.Dock    = 'Top'
-    $progressBar.Height  = Px 14
-    $progressBar.Minimum = 0
-    $progressBar.Maximum = 1
-    $progressBar.Value   = 0
-
-    $progressPanel.Controls.Add($progressBar)
-    $progressPanel.Controls.Add($statusLabel)
-
-    # A ordem importa: o indice 0 e o ULTIMO a fazer dock, entao o adicionado por ultimo fica
-    # mais a direita. Resultado da esquerda para a direita:
-    #   [progresso] [espaco] [Cancelar] [espaco] [INSTALAR SELECIONADOS]
-    $bottomBar.Controls.Add($progressPanel)
-    $bottomBar.Controls.Add($spacer)
-    $bottomBar.Controls.Add($cancelButton)
-    $bottomBar.Controls.Add($gapCancelInstall)
-    $bottomBar.Controls.Add($installButton)
-
-    # --- Drivers e ferramentas (linha unica e compacta) ---
-    $toolsBox = New-Object Windows.Forms.GroupBox
-    $toolsBox.Text      = ' Drivers e ferramentas '
-    $toolsBox.Dock      = 'Bottom'
-    $toolsBox.Height    = $FontUIBold.Height + (Px 40)
-    $toolsBox.Font      = $FontUIBold
-    $toolsBox.ForeColor = $Theme.Text
-    $toolsBox.Padding   = New-Object Windows.Forms.Padding((Px 8), (Px 2), (Px 8), (Px 6))
-    $toolsBox.BackColor = $Theme.Bg
-
-    $toolsColumns = 8
-    $toolsTable = New-Object Windows.Forms.TableLayoutPanel
-    $toolsTable.Dock        = 'Fill'
-    $toolsTable.ColumnCount = $toolsColumns
-    $toolsTable.RowCount    = 1
-    1..$toolsColumns | ForEach-Object {
-        $toolsTable.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle([Windows.Forms.SizeType]::Percent, (100 / $toolsColumns)))) | Out-Null
+    function New-TextLabel {
+        param([string]$Text, [Drawing.Font]$Font, $Color, $Back)
+        $l = New-Object Windows.Forms.Label
+        $l.Text        = $Text
+        $l.Font        = $Font
+        $l.ForeColor   = $Color
+        $l.BackColor   = $Back
+        $l.AutoSize    = $true
+        $l.UseMnemonic = $false
+        $l.Margin      = New-Object Windows.Forms.Padding(0)
+        return $l
     }
 
-    function New-ToolButton {
-        param([string]$Text, $Back, $Fore)
-        $b = New-Object Windows.Forms.Button
+    # Kind: 'accent' (acao principal), 'nav' (item da barra lateral), 'pill' (selecao rapida)
+    # ou 'ghost' (acao secundaria). $Back e a cor do que esta atras do botao: e ela que
+    # aparece nas quinas arredondadas.
+    function New-Btn {
+        param([string]$Text, [string]$Kind = 'ghost', $Back = $Theme.Bg)
+        $b = New-Object PosInstUI1.Btn
         $b.Text      = $Text
-        $b.Dock      = 'Fill'
-        $b.Margin    = New-Object Windows.Forms.Padding((Px 3))
-        $b.FlatStyle = 'Flat'
-        $b.UseVisualStyleBackColor = $false
         $b.Font      = $FontUI
-        $b.Cursor    = 'Hand'
         $b.BackColor = $Back
-        $b.ForeColor = $Fore
-        $b.FlatAppearance.BorderSize = 0
-        $b.FlatAppearance.MouseOverBackColor = [Drawing.Color]::FromArgb(71, 85, 105)
-        $b.FlatAppearance.MouseDownBackColor = [Drawing.Color]::FromArgb(30, 41, 59)
-        Set-Rounded $b
+        switch ($Kind) {
+            'accent' {
+                $b.Font      = $FontBig
+                $b.Radius    = 10
+                $b.Fill      = $Theme.Accent
+                $b.FillHover = $Theme.AccentHover
+                $b.FillDown  = $Theme.AccentDown
+                $b.Fore      = $Theme.AccentText
+                $b.Border    = [Drawing.Color]::Empty
+                $b.FillOff   = [Drawing.Color]::FromArgb(40, 40, 40)
+                $b.ForeOff   = [Drawing.Color]::FromArgb(125, 125, 125)
+                $b.BorderOff = [Drawing.Color]::Empty
+            }
+            'nav' {
+                $b.Radius    = 9
+                $b.AlignLeft = $true
+                $b.Fill      = $Back
+                $b.FillHover = $Theme.Hover
+                $b.FillDown  = $Theme.Down
+                $b.Fore      = $Theme.Sub
+                $b.Border    = [Drawing.Color]::Empty
+                $b.FillOn    = $Theme.NavOn
+                $b.ForeOn    = $Theme.Accent
+            }
+            'pill' {
+                $b.Radius    = 15
+                $b.PadX      = 6
+                $b.Fill      = $Back
+                $b.FillHover = $Theme.Hover
+                $b.FillDown  = $Theme.Down
+                $b.Fore      = $Theme.Sub
+                $b.Border    = $Theme.Border
+                $b.FillOff   = $Back
+            }
+            default {
+                $b.Radius    = 8
+                $b.PadX      = 6
+                $b.Fill      = $Back
+                $b.FillHover = $Theme.Hover
+                $b.FillDown  = $Theme.Down
+                $b.Fore      = $Theme.Text
+                $b.Border    = $Theme.Border
+                $b.FillOff   = $Back
+            }
+        }
         return $b
     }
 
-    # O primeiro botao apenas diagnostica (nao instala nada), por isso a cor neutra.
-    $checkDriversButton = New-ToolButton 'Verificar drivers' ([Drawing.Color]::FromArgb(2, 132, 199)) ([Drawing.Color]::White)
-    $nvidiaButton    = New-ToolButton 'Driver NVIDIA'    $Theme.Nvidia ([Drawing.Color]::White)
-    $nvidiaAppButton = New-ToolButton 'NVIDIA App'       $Theme.Nvidia ([Drawing.Color]::White)
-    $amdGpuButton    = New-ToolButton 'AMD Adrenalin'    $Theme.Amd    ([Drawing.Color]::White)
-    $amdChipsetButton= New-ToolButton 'Chipset AMD'      $Theme.Amd    ([Drawing.Color]::White)
-    $sdioButton      = New-ToolButton 'SDIO'             ([Drawing.Color]::FromArgb(88, 28, 135)) ([Drawing.Color]::White)
-    $upgradeButton   = New-ToolButton 'Atualizar tudo'   ([Drawing.Color]::FromArgb(51, 65, 85)) ([Drawing.Color]::White)
-    $activatorButton = New-ToolButton 'Rodar Ativador'   $Theme.Orange ([Drawing.Color]::White)
+    # --- Barra lateral ---
+    $side = New-Object Windows.Forms.Panel
+    $side.Dock      = 'Left'
+    $side.Width     = Px 214
+    $side.BackColor = $Theme.Bg
+    $side.Padding   = New-Object Windows.Forms.Padding((Px 12), (Px 18), (Px 12), (Px 14))
+    $sideW          = $side.Width - $side.Padding.Horizontal
 
-    $toolsTable.Controls.Add($checkDriversButton, 0, 0)
-    $toolsTable.Controls.Add($nvidiaButton,       1, 0)
-    $toolsTable.Controls.Add($nvidiaAppButton,    2, 0)
-    $toolsTable.Controls.Add($amdGpuButton,       3, 0)
-    $toolsTable.Controls.Add($amdChipsetButton,   4, 0)
-    $toolsTable.Controls.Add($sdioButton,         5, 0)
-    $toolsTable.Controls.Add($upgradeButton,      6, 0)
-    $toolsTable.Controls.Add($activatorButton,    7, 0)
-    $toolsBox.Controls.Add($toolsTable)
+    $sideLine = New-Object Windows.Forms.Panel
+    $sideLine.Dock      = 'Left'
+    $sideLine.Width     = 1
+    $sideLine.BackColor = $Theme.Line
 
-    $tipTools = New-Object Windows.Forms.ToolTip
-    $tipTools.SetToolTip($checkDriversButton, "Compara os drivers instalados com as versoes dos repositorios.`nSo relata: nao instala nada.")
-    $tipTools.SetToolTip($nvidiaButton,       'Driver de video NVIDIA (pacote nvidia-display-driver)')
-    $tipTools.SetToolTip($nvidiaAppButton,    'NVIDIA App: painel atual da NVIDIA, sucessor do GeForce Experience')
-    $tipTools.SetToolTip($amdGpuButton,       'AMD Software: Adrenalin Edition (video AMD para desktop)')
-    $tipTools.SetToolTip($amdChipsetButton,   'Drivers de chipset AMD (AM4 / AM5 / TR4)')
-    $tipTools.SetToolTip($sdioButton,         "Instala o Snappy Driver Installer Origin.`nAlternativa aberta e sem cadastro ao DriverPack.`nOs pacotes de driver dele sao baixados a parte e ocupam varios GB.")
+    $sideTop = New-Object Windows.Forms.Panel
+    $sideTop.Dock      = 'Fill'
+    $sideTop.BackColor = $Theme.Bg
+
+    $brandLabel = New-TextLabel (U 'P\u00d3S INSTALADOR') $FontBrand $Theme.Text $Theme.Bg
+    $brandLabel.Location = New-Object Drawing.Point((Px 8), 0)
+
+    $verLabel = New-TextLabel "v$AppVersion  |  $env:COMPUTERNAME" $FontSmall $Theme.Dim $Theme.Bg
+    $verLabel.AutoSize     = $false
+    $verLabel.AutoEllipsis = $true
+    $verLabel.SetBounds((Px 8), ($FontBrand.Height + (Px 2)), ($sideW - (Px 8)), ($FontSmall.Height + (Px 2)))
+
+    $sideY = $verLabel.Bottom + (Px 24)
+
+    $navTitle = New-TextLabel (U 'INSTALA\u00c7\u00c3O') $FontCaps $Theme.Dim $Theme.Bg
+    $navTitle.Location = New-Object Drawing.Point((Px 8), $sideY)
+    $sideY += $FontCaps.Height + (Px 8)
+
+    $navPrograms = New-Btn 'Programas' 'nav'
+    $navPrograms.SetBounds(0, $sideY, $sideW, (Px 36))
+    $navPrograms.Active = $true
+    $sideY += (Px 38)
+
+    $navTools = New-Btn 'Drivers e ferramentas' 'nav'
+    $navTools.SetBounds(0, $sideY, $sideW, (Px 36))
+    $sideY += (Px 36) + (Px 24)
+
+    $quickTitle = New-TextLabel (U 'SELE\u00c7\u00c3O R\u00c1PIDA') $FontCaps $Theme.Dim $Theme.Bg
+    $quickTitle.Location = New-Object Drawing.Point((Px 8), $sideY)
+    $sideY += $FontCaps.Height + (Px 8)
+
+    $pillGap = Px 6
+    $pillW   = [int](($sideW - $pillGap) / 2)
+    $pillH   = Px 30
+
+    $selectDefaultButton = New-Btn (U 'Padr\u00e3o') 'pill'
+    $selectAllButton     = New-Btn 'Todos'    'pill'
+    $deselectAllButton   = New-Btn 'Nenhum'   'pill'
+    $invertButton        = New-Btn 'Inverter' 'pill'
+    $selectDefaultButton.SetBounds(0,                    $sideY, $pillW, $pillH)
+    $selectAllButton.SetBounds(($pillW + $pillGap),      $sideY, $pillW, $pillH)
+    $sideY += $pillH + $pillGap
+    $deselectAllButton.SetBounds(0,                      $sideY, $pillW, $pillH)
+    $invertButton.SetBounds(($pillW + $pillGap),         $sideY, $pillW, $pillH)
+
+    $sideTop.Controls.AddRange(@(
+        $brandLabel, $verLabel, $navTitle, $navPrograms, $navTools,
+        $quickTitle, $selectDefaultButton, $selectAllButton, $deselectAllButton, $invertButton))
+
+    # Cartao de ambiente, preso ao rodape da barra lateral.
+    $envRowH = $FontMono.Height + (Px 6)
+    $envCard = New-Object PosInstUI1.Card
+    $envCard.Dock      = 'Bottom'
+    $envCard.Height    = (3 * $envRowH) + (Px 20)
+    $envCard.BackColor = $Theme.Bg
+    $envCard.Fill      = $Theme.Bg
+    $envCard.Border    = $Theme.CardBorder
+
+    function New-EnvRow {
+        param([string]$Key, [int]$Row)
+        $top = (Px 10) + ($Row * $envRowH)
+        $k = New-TextLabel $Key $FontMono $Theme.Dim $Theme.Bg
+        $k.Location = New-Object Drawing.Point((Px 14), $top)
+        $v = New-TextLabel '-' $FontMono $Theme.Text $Theme.Bg
+        $v.AutoSize     = $false
+        $v.AutoEllipsis = $true
+        $v.SetBounds((Px 78), $top, ($sideW - (Px 78) - (Px 10)), $envRowH)
+        $envCard.Controls.Add($k)
+        $envCard.Controls.Add($v)
+        return $v
+    }
+    $envWingetLabel = New-EnvRow 'WINGET' 0
+    $envChocoLabel  = New-EnvRow 'CHOCO'  1
+    $envQueueLabel  = New-EnvRow 'FILA'   2
+    $envQueueLabel.Text = 'parada'
 
     # Fill primeiro (indice 0 e o ultimo a fazer dock), depois as bordas.
+    $side.Controls.Add($sideTop)
+    $side.Controls.Add($envCard)
+
+    # --- Divisor: pagina (esquerda) x execucao e registro (direita) ---
+    $split = New-Object Windows.Forms.SplitContainer
+    $split.Dock             = 'Fill'
+    $split.Orientation      = 'Vertical'
+    # O tamanho vem antes dos minimos: com os 150 px padrao eles nao caberiam.
+    $split.Size             = $mainForm.ClientSize
+    $split.SplitterWidth    = Px 6
+    $split.BackColor        = $Theme.Bg
+    $split.TabStop          = $false
+    $split.Panel1MinSize    = Px 300
+    $split.Panel2MinSize    = Px 400
+    $split.FixedPanel       = 'None'
+    $split.Panel1.BackColor = $Theme.Bg
+    $split.Panel2.BackColor = $Theme.Bg
+    $split.Panel1.Padding   = New-Object Windows.Forms.Padding((Px 22), (Px 16), (Px 6), (Px 14))
+    $split.Panel2.Padding   = New-Object Windows.Forms.Padding((Px 6), (Px 16), (Px 20), (Px 16))
+
     $mainForm.Controls.Add($split)
-    $mainForm.Controls.Add($header)
-    $mainForm.Controls.Add($toolsBox)
-    $mainForm.Controls.Add($bottomBar)
+    $mainForm.Controls.Add($sideLine)
+    $mainForm.Controls.Add($side)
+
+    $tip = New-Object Windows.Forms.ToolTip
+    $tip.InitialDelay = 400
     #endregion
 
-    #region PAINEL SUPERIOR: SELECAO DE PROGRAMAS
-    $appsPanel = New-Object Windows.Forms.Panel
-    $appsPanel.Dock        = 'Fill'
-    $appsPanel.AutoScroll  = $true
-    $appsPanel.BackColor   = $Theme.Bg
+    #region PAGINA: PROGRAMAS
+    $pagePrograms = New-Object Windows.Forms.Panel
+    $pagePrograms.Dock      = 'Fill'
+    $pagePrograms.BackColor = $Theme.Bg
 
-    # Barra em FlowLayoutPanel: cada item se posiciona depois do anterior, entao nada colide
-    # quando o texto cresce com o DPI ou com o idioma do sistema.
-    $toolbar = New-Object Windows.Forms.FlowLayoutPanel
-    $toolbar.Dock          = 'Top'
-    $toolbar.FlowDirection = 'LeftToRight'
-    $toolbar.WrapContents  = $false
-    $toolbar.AutoSize      = $true
-    $toolbar.AutoSizeMode  = 'GrowAndShrink'
-    $toolbar.Padding       = New-Object Windows.Forms.Padding(0, 0, 0, (Px 4))
+    $pageHeadH = $FontTitle.Height + $FontUI.Height + (Px 20)
+    $pageBaseW = Px 620   # largura de referencia; os filhos acompanham por Anchor
+
+    $toolbar = New-Object Windows.Forms.Panel
+    $toolbar.Dock      = 'Top'
+    $toolbar.Size      = New-Object Drawing.Size($pageBaseW, $pageHeadH)
+    $toolbar.BackColor = $Theme.Bg
+
+    $pageTitle = New-TextLabel 'Programas' $FontTitle $Theme.Text $Theme.Bg
+    $pageTitle.Location = New-Object Drawing.Point(0, 0)
+
+    $countLabel = New-TextLabel '0 selecionados' $FontUI $Theme.Dim $Theme.Bg
+    $countLabel.Location = New-Object Drawing.Point((Px 2), ($FontTitle.Height + (Px 2)))
+
+    # Campo de busca: a caixa de texto fica sem borda, dentro de um cartao arredondado.
+    $searchCard = New-Object PosInstUI1.Card
+    $searchCard.BackColor = $Theme.Bg
+    $searchCard.Fill      = $Theme.Field
+    $searchCard.Border    = $Theme.Border
+    $searchCard.Radius    = 10
+    $searchCard.Cursor    = 'IBeam'
+    $searchCard.SetBounds(($pageBaseW - (Px 250)), (Px 4), (Px 250), (Px 38))
 
     $searchBox = New-Object Windows.Forms.TextBox
-    $searchBox.Width  = Px 200
-    $searchBox.Font   = $FontUI
-    $searchBox.BackColor = $Theme.PanelBg
-    $searchBox.ForeColor = $Theme.Text
-    $searchBox.Margin = New-Object Windows.Forms.Padding(0, 0, (Px 10), 0)
+    $searchBox.BorderStyle = 'None'
+    $searchBox.Font        = $FontUI
+    $searchBox.BackColor   = $Theme.Field
+    $searchBox.ForeColor   = $Theme.Text
+    $searchBox.SetBounds((Px 14), [int](($searchCard.Height - $searchBox.PreferredHeight) / 2), ($searchCard.Width - (Px 28)), $searchBox.PreferredHeight)
+    $searchBox.Anchor      = 'Top, Left, Right'
 
     $searchHint = New-Object Windows.Forms.Label
     $searchHint.Text      = 'Filtrar programas...'
     $searchHint.Font      = $FontUI
-    $searchHint.ForeColor = $Theme.HeaderDim
-    $searchHint.BackColor = $Theme.PanelBg
+    $searchHint.ForeColor = $Theme.Dim
+    $searchHint.BackColor = $Theme.Field
     $searchHint.AutoSize  = $true
-    $searchHint.Location  = New-Object Drawing.Point((Px 3), (Px 3))
+    $searchHint.Cursor    = 'IBeam'
+    $searchHint.Location  = New-Object Drawing.Point(0, 0)
     $searchHint.Parent    = $searchBox
     $searchHint.BringToFront()
 
-    # Altura comum de todos os controles da barra, derivada da altura real da caixa de texto.
-    $barItemHeight = $searchBox.Height
+    $searchCard.Controls.Add($searchBox)
+    $searchCard.Add_Click({ $searchBox.Focus() })
+    $toolbar.Controls.AddRange(@($pageTitle, $countLabel, $searchCard))
 
-    function New-SmallButton {
-        param([string]$Text)
-        $b = New-Object Windows.Forms.Button
-        $b.Text      = $Text
-        $b.Font      = $FontUI
-        $b.AutoSize  = $false
-        $b.Height    = $barItemHeight
-        $b.Width     = (Get-TextWidth $Text $FontUI) + (Px 22)
-        $b.Margin    = New-Object Windows.Forms.Padding(0, 0, (Px 5), 0)
-        $b.FlatStyle = 'Flat'
-        $b.UseVisualStyleBackColor = $false
-        $b.BackColor = $Theme.PanelBg
-        $b.Cursor    = 'Hand'
-        $b.FlatAppearance.BorderColor = $Theme.Border
-        $b.FlatAppearance.BorderSize = 1
-        $b.FlatAppearance.MouseOverBackColor = $Theme.ChipHover
-        $b.FlatAppearance.MouseDownBackColor = $Theme.ChipOn
-        Set-Rounded $b (Px 7)
-        return $b
+    # A busca fica encostada a direita e encolhe quando a pagina estreita, para nao cobrir o titulo.
+    $toolbar.Add_Resize({
+        $w = [Math]::Min((Px 250), ($toolbar.Width - $pageTitle.Width - (Px 20)))
+        $w = [Math]::Max((Px 120), $w)
+        $searchCard.SetBounds(($toolbar.Width - $w), (Px 4), $w, (Px 38))
+    })
+
+    $appsPanel = New-Object Windows.Forms.Panel
+    $appsPanel.Dock       = 'Fill'
+    $appsPanel.AutoScroll = $true
+    $appsPanel.BackColor  = $Theme.Bg
+    $appsPanel.Add_HandleCreated({ [PosInstUI1.Ui]::DarkScrollBars($this.Handle) })
+
+    $pagePrograms.Controls.Add($appsPanel)
+    $pagePrograms.Controls.Add($toolbar)
+
+    # Nomes de categoria com acento, apenas para exibicao (as chaves do catalogo seguem em ASCII).
+    $catDisplay = @{
+        'Comunicacao' = U 'Comunica\u00e7\u00e3o'
+        'Utilitarios' = U 'Utilit\u00e1rios'
+        'Seguranca'   = U 'Seguran\u00e7a'
+        'Audio'       = U '\u00c1udio'
     }
 
-    $selectDefaultButton = New-SmallButton 'Padrao'
-    $selectAllButton     = New-SmallButton 'Todos'
-    $deselectAllButton   = New-SmallButton 'Nenhum'
-    $invertButton        = New-SmallButton 'Inverter'
-
-    $countLabel = New-Object Windows.Forms.Label
-    $countLabel.Text      = '0 selecionados'
-    $countLabel.AutoSize  = $true
-    $countLabel.Font      = $FontUIBold
-    $countLabel.ForeColor = $Theme.Green
-    $countLabel.TextAlign = 'MiddleLeft'
-    $countLabel.Margin    = New-Object Windows.Forms.Padding((Px 8), 0, 0, 0)
-    $countLabel.MinimumSize = New-Object Drawing.Size(0, $barItemHeight)
-
-    $toolbar.Controls.AddRange(@($searchBox, $selectDefaultButton, $selectAllButton, $deselectAllButton, $invertButton, $countLabel))
-
-    $split.Panel1.Controls.Add($appsPanel)
-    $split.Panel1.Controls.Add($toolbar)
-
-    # --- Monta as categorias e os "chips" de aplicativo ---
-    $tip = New-Object Windows.Forms.ToolTip
-    $tip.InitialDelay = 400
-
-    # Dimensoes dos chips, derivadas da altura real da fonte (nao de um numero fixo em pixel).
-    $chipHeight = $FontChip.Height + (Px 10)
-    $chipGap    = Px 4
+    # Medidas das categorias, derivadas da altura real das fontes.
+    $rowH     = $FontUI.Height + (Px 12)
+    $catHeadH = $FontCaps.Height + (Px 24)
 
     foreach ($catName in $appCatalog.Keys) {
-        $groupBox = New-Object Windows.Forms.GroupBox
-        $groupBox.Text      = " $catName "
-        $groupBox.Font      = $FontUIBold
-        $groupBox.ForeColor = $Theme.Text
-        $groupBox.BackColor = $Theme.Bg
+        $catTitle = if ($catDisplay.ContainsKey($catName)) { $catDisplay[$catName] } else { $catName }
 
-        $flow = New-Object Windows.Forms.FlowLayoutPanel
-        $flow.FlowDirection = 'LeftToRight'
-        $flow.WrapContents  = $true
-        $flow.AutoScroll    = $false
-        $flow.Padding       = New-Object Windows.Forms.Padding(0)
-        $flow.Margin        = New-Object Windows.Forms.Padding(0)
+        $card = New-Object PosInstUI1.Card
+        $card.BackColor = $Theme.Bg
+        $card.Fill      = $Theme.Card
+        $card.Border    = $Theme.CardBorder
+
+        $catLabel = New-TextLabel $catTitle.ToUpper() $FontCaps $Theme.Sub $Theme.Card
+        $catLabel.Location = New-Object Drawing.Point((Px 14), (Px 13))
+
+        $numLabel = New-TextLabel ([string]@($appCatalog[$catName]).Count) $FontCaps $Theme.Dim $Theme.Card
+        $numLabel.Location = New-Object Drawing.Point((Px 150), (Px 13))
+
+        $card.Controls.Add($catLabel)
+        $card.Controls.Add($numLabel)
 
         $chips = @()
         foreach ($app in $appCatalog[$catName]) {
             $src = if ($app.Src) { $app.Src } else { 'winget' }
 
-            $chip = New-Object Windows.Forms.CheckBox
-            $chip.Appearance = [Windows.Forms.Appearance]::Button
-            $chip.Text       = $app.Nome
+            $chip = New-Object PosInstUI1.Toggle
+            $chip.Text      = $app.Nome
+            $chip.Font      = $FontUI
+            $chip.TagFont   = $FontSmall
+            $chip.BackColor = $Theme.Card
+            $chip.HoverFill = $Theme.Hover
+            # So as origens diferentes do padrao (winget) aparecem ao lado do nome.
+            if ($src -ne 'winget') { $chip.TagText = $src }
             # 'Show' guarda o estado do filtro de busca. Nao usamos a propriedade Visible como fonte
             # da verdade porque o getter dela retorna false enquanto o formulario nao esta visivel,
             # e o layout roda tambem em ClientSizeChanged, antes do evento Shown.
-            $chip.Tag        = [pscustomobject]@{ Nome = $app.Nome; ID = $app.ID; Src = $src; Def = [bool]$app.Def; Show = $true }
-            $chip.TextAlign  = 'MiddleCenter'
-            $chip.FlatStyle  = 'Flat'
-            $chip.UseVisualStyleBackColor = $false
-            $chip.Font       = $FontChip
-            $chip.Margin     = New-Object Windows.Forms.Padding(0, 0, $chipGap, $chipGap)
-            $chip.BackColor  = $Theme.ChipBg
-            $chip.Cursor     = 'Hand'
-            # Largura medida no texto real, com AutoSize desligado. Cada chip fica do tamanho
-            # do proprio rotulo ("VLC" bem menor que "Microsoft Office"), o que empacota muito
-            # mais itens por linha do que uma largura uniforme. Medir aqui, em vez de confiar no
-            # AutoSize, deixa o resultado deterministico: e a mesma conta usada em Update-AppLayout
-            # para prever onde o FlowLayoutPanel vai quebrar a linha.
-            $chip.AutoSize = $false
-            $chip.Size     = New-Object Drawing.Size(((Get-TextWidth $app.Nome $FontChip) + (Px 18)), $chipHeight)
-            $chip.FlatAppearance.BorderSize          = 1
-            $chip.FlatAppearance.BorderColor         = $Theme.ChipBorder
-            $chip.FlatAppearance.CheckedBackColor    = $Theme.ChipOn
-            $chip.FlatAppearance.MouseOverBackColor  = $Theme.ChipHover
-            $chip.FlatAppearance.MouseDownBackColor = $Theme.ChipOn
-            Set-Rounded $chip (Px 7)
+            $chip.Tag       = [pscustomobject]@{ Nome = $app.Nome; ID = $app.ID; Src = $src; Def = [bool]$app.Def; Show = $true }
+            $chip.Height    = $rowH
             $tip.SetToolTip($chip, "$($app.Nome)`n$($app.ID)  [$src]")
 
-            # Apenas cor e borda mudam ao marcar. Alternar o peso da fonte redimensionaria o chip
-            # (ele e AutoSize) e faria a categoria inteira refluir a cada clique.
-            $chip.Add_CheckedChanged({
-                if ($this.Checked) { $this.FlatAppearance.BorderColor = $Theme.ChipOnBrd }
-                else               { $this.FlatAppearance.BorderColor = $Theme.ChipBorder }
-                Update-SelectionCount
-            })
+            $chip.Add_CheckedChanged({ Update-SelectionCount })
 
-            $flow.Controls.Add($chip)
+            $card.Controls.Add($chip)
             $chips += $chip
             $script:AllChips += $chip
         }
 
-        $groupBox.Controls.Add($flow)
-        $appsPanel.Controls.Add($groupBox)
-
-        $script:CatList += [pscustomobject]@{ Name = $catName; Group = $groupBox; Flow = $flow; Chips = $chips }
+        $appsPanel.Controls.Add($card)
+        $script:CatList += [pscustomobject]@{ Name = $catName; Title = $catTitle; Group = $card; Count = $numLabel; Chips = $chips }
     }
     #endregion
 
-    #region PAINEL INFERIOR: LOG
-    $logBar = New-Object Windows.Forms.FlowLayoutPanel
-    $logBar.Dock          = 'Top'
-    $logBar.FlowDirection = 'LeftToRight'
-    $logBar.WrapContents  = $false
-    $logBar.AutoSize      = $true
-    $logBar.AutoSizeMode  = 'GrowAndShrink'
-    $logBar.Padding       = New-Object Windows.Forms.Padding(0, 0, 0, (Px 3))
+    #region PAGINA: DRIVERS E FERRAMENTAS
+    $pageTools = New-Object Windows.Forms.Panel
+    $pageTools.Dock      = 'Fill'
+    $pageTools.BackColor = $Theme.Bg
+    $pageTools.Visible   = $false
 
-    $logLabel = New-Object Windows.Forms.Label
-    $logLabel.Text        = 'Log de execucao'
-    $logLabel.Font        = $FontUIBold
-    $logLabel.ForeColor   = $Theme.Text
-    $logLabel.AutoSize    = $true
-    $logLabel.TextAlign   = 'MiddleLeft'
-    $logLabel.MinimumSize = New-Object Drawing.Size(0, $barItemHeight)
-    $logLabel.Margin      = New-Object Windows.Forms.Padding(0, 0, (Px 14), 0)
+    $toolsHeader = New-Object Windows.Forms.Panel
+    $toolsHeader.Dock      = 'Top'
+    $toolsHeader.Height    = $pageHeadH
+    $toolsHeader.BackColor = $Theme.Bg
 
-    $autoScrollCheck = New-Object Windows.Forms.CheckBox
-    $autoScrollCheck.Text        = 'Auto-rolagem'
-    $autoScrollCheck.Font        = $FontUI
-    $autoScrollCheck.ForeColor   = $Theme.Text
-    $autoScrollCheck.BackColor   = $Theme.Bg
-    $autoScrollCheck.Checked     = $true
-    $autoScrollCheck.AutoSize    = $true
-    $autoScrollCheck.MinimumSize = New-Object Drawing.Size(0, $barItemHeight)
-    $autoScrollCheck.Margin      = New-Object Windows.Forms.Padding(0, 0, (Px 14), 0)
+    $toolsTitle = New-TextLabel 'Drivers e ferramentas' $FontTitle $Theme.Text $Theme.Bg
+    $toolsTitle.Location = New-Object Drawing.Point(0, 0)
+    $toolsSub = New-TextLabel (U 'Cada item entra na mesma fila de execu\u00e7\u00e3o dos programas.') $FontUI $Theme.Dim $Theme.Bg
+    $toolsSub.Location = New-Object Drawing.Point((Px 2), ($FontTitle.Height + (Px 2)))
+    $toolsHeader.Controls.AddRange(@($toolsTitle, $toolsSub))
 
-    $copyLogButton  = New-SmallButton 'Copiar'
-    $saveLogButton  = New-SmallButton 'Salvar'
-    $clearLogButton = New-SmallButton 'Limpar'
+    $toolsList = New-Object Windows.Forms.Panel
+    $toolsList.Dock       = 'Fill'
+    $toolsList.AutoScroll = $true
+    $toolsList.BackColor  = $Theme.Bg
+    $toolsList.Add_HandleCreated({ [PosInstUI1.Ui]::DarkScrollBars($this.Handle) })
 
-    $logBar.Controls.AddRange(@($logLabel, $autoScrollCheck, $copyLogButton, $saveLogButton, $clearLogButton))
+    $toolCardH   = (2 * $FontUI.Height) + (Px 28)
+    $toolCardGap = Px 8
+    $toolBtnW    = Px 104
+    $script:ToolCards   = @()
+    $script:ToolButtons = @()
 
+    # Um cartao por ferramenta: nome, descricao e o botao que dispara a tarefa.
+    function New-ToolCard {
+        param([string]$Title, [string]$Description, [string]$Action = 'Executar')
+
+        $card = New-Object PosInstUI1.Card
+        $card.BackColor = $Theme.Bg
+        $card.Fill      = $Theme.Card
+        $card.Border    = $Theme.CardBorder
+        $card.SetBounds(0, ($script:ToolCards.Count * ($toolCardH + $toolCardGap)), $pageBaseW, $toolCardH)
+
+        $t = New-TextLabel $Title $FontUIBold $Theme.Text $Theme.Card
+        $t.Location = New-Object Drawing.Point((Px 16), (Px 12))
+
+        $d = New-TextLabel $Description $FontUI $Theme.Dim $Theme.Card
+        $d.AutoSize     = $false
+        $d.AutoEllipsis = $true
+        $d.SetBounds((Px 16), ((Px 12) + $FontUIBold.Height + (Px 2)), ($pageBaseW - $toolBtnW - (Px 46)), ($FontUI.Height + (Px 2)))
+        $d.Anchor       = 'Top, Left, Right'
+        $tip.SetToolTip($d, $Description)
+
+        $b = New-Btn $Action 'ghost' $Theme.Card
+        $b.SetBounds(($pageBaseW - $toolBtnW - (Px 14)), [int](($toolCardH - (Px 32)) / 2), $toolBtnW, (Px 32))
+        $b.Anchor = 'Top, Right'
+
+        $card.Controls.AddRange(@($t, $d, $b))
+        $toolsList.Controls.Add($card)
+        $script:ToolCards   += $card
+        $script:ToolButtons += $b
+        return $b
+    }
+
+    # O primeiro item apenas diagnostica (nao instala nada).
+    $checkDriversButton = New-ToolCard 'Verificar drivers' (U 'Compara os drivers instalados com os reposit\u00f3rios. S\u00f3 relata, n\u00e3o instala nada.') 'Verificar'
+    $nvidiaButton       = New-ToolCard 'Driver NVIDIA'     (U 'Driver de v\u00eddeo NVIDIA (pacote nvidia-display-driver).') 'Instalar'
+    $nvidiaAppButton    = New-ToolCard 'NVIDIA App'        'Painel atual da NVIDIA, sucessor do GeForce Experience.' 'Instalar'
+    $amdGpuButton       = New-ToolCard 'AMD Adrenalin'     (U 'AMD Software: Adrenalin Edition (v\u00eddeo AMD para desktop).') 'Instalar'
+    $amdChipsetButton   = New-ToolCard 'Chipset AMD'       'Drivers de chipset AMD (AM4 / AM5 / TR4).' 'Instalar'
+    $sdioButton         = New-ToolCard 'SDIO'              (U 'Snappy Driver Installer Origin. Os pacotes de driver s\u00e3o baixados \u00e0 parte e ocupam v\u00e1rios GB.') 'Instalar'
+    $upgradeButton      = New-ToolCard 'Atualizar tudo'    'Atualiza todos os programas conhecidos pelo Winget.' 'Atualizar'
+    $activatorButton    = New-ToolCard 'Rodar Ativador'    'Abre o script de get.activated.win em uma janela de console separada.' 'Abrir'
+
+    $toolsList.Add_ClientSizeChanged({
+        $w = $toolsList.ClientSize.Width - (Px 2)
+        if ($w -lt (Px 200)) { return }
+        foreach ($c in $script:ToolCards) { $c.Width = $w }
+    })
+
+    $pageTools.Controls.Add($toolsList)
+    $pageTools.Controls.Add($toolsHeader)
+
+    $split.Panel1.Controls.Add($pagePrograms)
+    $split.Panel1.Controls.Add($pageTools)
+
+    function Show-Page {
+        param([string]$Name)
+        $pagePrograms.Visible = ($Name -eq 'programs')
+        $pageTools.Visible    = ($Name -eq 'tools')
+        $navPrograms.Active   = ($Name -eq 'programs')
+        $navTools.Active      = ($Name -eq 'tools')
+        if ($Name -eq 'programs') { Update-AppLayout }
+    }
+    $navPrograms.Add_Click({ Show-Page 'programs' })
+    $navTools.Add_Click({ Show-Page 'tools' })
+    #endregion
+
+    #region PAINEL DE EXECUCAO E REGISTRO
+    $execBaseW = Px 420   # largura de referencia; os filhos acompanham por Anchor
+
+    $execTop = New-Object Windows.Forms.Panel
+    $execTop.Dock      = 'Top'
+    $execTop.BackColor = $Theme.Bg
+    $execTop.Width     = $execBaseW
+
+    $installButton = New-Btn 'INSTALAR SELECIONADOS' 'accent'
+    $installButton.SetBounds(0, 0, $execBaseW, (Px 50))
+    $installButton.Anchor = 'Top, Left, Right'
+
+    $cancelButton = New-Btn 'Cancelar' 'ghost'
+    $cancelW      = (Get-TextWidth 'Cancelar' $FontUI) + (Px 30)
+    $cancelButton.SetBounds(($execBaseW - $cancelW), (Px 62), $cancelW, (Px 30))
+    $cancelButton.Anchor  = 'Top, Right'
+    $cancelButton.Enabled = $false
+
+    $progressBar = New-Object PosInstUI1.Bar
+    $progressBar.BackColor = $Theme.Bg
+    $progressBar.Track     = $Theme.NavOn
+    $progressBar.FillColor = $Theme.Accent
+    $progressBar.Minimum   = 0
+    $progressBar.Maximum   = 1
+    $progressBar.Value     = 0
+    $progressBar.SetBounds(0, ((Px 62) + [int](((Px 30) - (Px 6)) / 2)), ($execBaseW - $cancelW - (Px 14)), (Px 6))
+    $progressBar.Anchor    = 'Top, Left, Right'
+
+    $statusLabel = New-Object Windows.Forms.Label
+    $statusLabel.Text         = 'Pronto.'
+    $statusLabel.ForeColor    = $Theme.Sub
+    $statusLabel.BackColor    = $Theme.Bg
+    $statusLabel.TextAlign    = 'MiddleLeft'
+    $statusLabel.AutoSize     = $false
+    $statusLabel.AutoEllipsis = $true
+    $statusLabel.UseMnemonic  = $false
+    $statusLabel.SetBounds(0, ((Px 62) + (Px 30) + (Px 6)), $execBaseW, ($FontUI.Height + (Px 4)))
+    $statusLabel.Anchor       = 'Top, Left, Right'
+
+    $execTop.Height = $statusLabel.Bottom + (Px 10)
+    $execTop.Controls.AddRange(@($installButton, $progressBar, $cancelButton, $statusLabel))
+
+    # Registro: ocupa todo o resto da coluna.
+    $logCard = New-Object PosInstUI1.Card
+    $logCard.Dock      = 'Fill'
+    $logCard.BackColor = $Theme.Bg
+    $logCard.Fill      = $Theme.LogBg
+    $logCard.Border    = $Theme.CardBorder
+    $logCard.Padding   = New-Object Windows.Forms.Padding((Px 14), (Px 4), (Px 6), (Px 10))
+
+    $logBarH = Px 42
+    $logBar  = New-Object Windows.Forms.Panel
+    $logBar.Dock      = 'Top'
+    $logBar.Height    = $logBarH
+    $logBar.BackColor = $Theme.LogBg
+
+    $logLabel = New-TextLabel 'REGISTRO' $FontCaps $Theme.Sub $Theme.LogBg
+    $logLabel.Location = New-Object Drawing.Point(0, [int](($logBarH - $FontCaps.Height) / 2))
+
+    $logTools = New-Object Windows.Forms.FlowLayoutPanel
+    $logTools.Dock          = 'Right'
+    $logTools.FlowDirection = 'LeftToRight'
+    $logTools.WrapContents  = $false
+    $logTools.AutoSize      = $true
+    $logTools.AutoSizeMode  = 'GrowAndShrink'
+    $logTools.BackColor     = $Theme.LogBg
+    $logTools.Padding       = New-Object Windows.Forms.Padding(0, [int](($logBarH - (Px 28)) / 2), 0, 0)
+
+    $autoScrollCheck = New-Object PosInstUI1.Toggle
+    $autoScrollCheck.Text      = 'Auto-rolagem'
+    $autoScrollCheck.Font      = $FontUI
+    $autoScrollCheck.BackColor = $Theme.LogBg
+    $autoScrollCheck.HoverFill = $Theme.Hover
+    $autoScrollCheck.Checked   = $true
+    $autoScrollCheck.Size      = New-Object Drawing.Size(((Get-TextWidth 'Auto-rolagem' $FontUI) + (Px 52)), (Px 28))
+    $autoScrollCheck.Margin    = New-Object Windows.Forms.Padding(0, 0, (Px 6), 0)
+
+    function New-LogButton {
+        param([string]$Text)
+        $b = New-Btn $Text 'ghost' $Theme.LogBg
+        $b.Size   = New-Object Drawing.Size(((Get-TextWidth $Text $FontUI) + (Px 18)), (Px 28))
+        $b.Margin = New-Object Windows.Forms.Padding(0, 0, (Px 6), 0)
+        return $b
+    }
+    $copyLogButton  = New-LogButton 'Copiar'
+    $saveLogButton  = New-LogButton 'Salvar'
+    $clearLogButton = New-LogButton 'Limpar'
+
+    $logTools.Controls.AddRange(@($autoScrollCheck, $copyLogButton, $saveLogButton, $clearLogButton))
+    $logBar.Controls.Add($logLabel)
+    $logBar.Controls.Add($logTools)
+
+    # Com a coluna no tamanho minimo nao sobra espaco para o titulo ao lado dos botoes.
+    $logBar.Add_Resize({
+        $logLabel.Visible = (($logBar.Width - $logTools.Width) -ge ($logLabel.PreferredWidth + (Px 4)))
+    })
+
+    # Com a coluna estreita, quebra de linha em vez de rolagem horizontal.
     $logBox = New-Object Windows.Forms.RichTextBox
     $logBox.Dock        = 'Fill'
     $logBox.ReadOnly    = $true
@@ -840,22 +1314,39 @@ public static extern bool SetProcessDPIAware();
     $logBox.ForeColor   = $Theme.LogFg
     $logBox.Font        = $FontLog
     $logBox.BorderStyle = 'None'
-    $logBox.WordWrap    = $false
-    $logBox.ScrollBars  = 'Both'
+    $logBox.WordWrap    = $true
+    $logBox.ScrollBars  = 'Vertical'
     $logBox.DetectUrls  = $false
+    $logBox.Add_HandleCreated({ [PosInstUI1.Ui]::DarkScrollBars($this.Handle) })
 
-    $split.Panel2.Controls.Add($logBox)
-    $split.Panel2.Controls.Add($logBar)
+    $logCard.Controls.Add($logBox)
+    $logCard.Controls.Add($logBar)
+
+    $split.Panel2.Controls.Add($logCard)
+    $split.Panel2.Controls.Add($execTop)
     #endregion
 
     #region FUNCOES DE APOIO
 
     function Update-SelectionCount {
-        $n = @($script:AllChips | Where-Object { $_.Checked }).Count
-        $countLabel.Text = if ($n -eq 1) { '1 selecionado' } else { "$n selecionados" }
+        $n     = @($script:AllChips | Where-Object { $_.Checked }).Count
+        $total = $script:AllChips.Count
+        $countLabel.Text    = if ($n -eq 1) { "1 selecionado de $total" } else { "$n selecionados de $total" }
+        $installButton.Text = if     ($n -eq 0) { 'INSTALAR SELECIONADOS' }
+                              elseif ($n -eq 1) { 'INSTALAR 1 SELECIONADO' }
+                              else              { "INSTALAR $n SELECIONADOS" }
     }
 
+    # Situacao do Winget e do Chocolatey no cartao da barra lateral.
+    function Update-EnvStatus {
+        $envWingetLabel.Text = if (Test-Tool 'winget') { 'OK' } else { 'ausente' }
+        $envChocoLabel.Text  = if (Test-Tool 'choco')  { 'OK' } else { 'sob demanda' }
+    }
+
+    # Distribui os cartoes de categoria em colunas (a quantidade depende da largura) e empilha
+    # cada um na coluna mais curta, tipo "masonry". Dentro do cartao, uma linha por programa.
     function Update-AppLayout {
+        param([switch]$Retry)
         if ($script:LayoutBusy) { return }
         if ($script:CatList.Count -eq 0) { return }
 
@@ -866,18 +1357,18 @@ public static extern bool SetProcessDPIAware();
         try {
             $appsPanel.SuspendLayout()
 
-            $gap     = Px 8
-            $colMin  = Px 330
-            $headerH = $FontUIBold.Height + (Px 8)   # faixa do titulo do GroupBox
+            $gap    = Px 12
+            $colMin = Px 200
 
-            $cols = [Math]::Floor($avail / $colMin)
+            $cols = [Math]::Floor(($avail + $gap) / ($colMin + $gap))
             if ($cols -lt 1) { $cols = 1 }
             if ($cols -gt 4) { $cols = 4 }
 
-            $colW  = [Math]::Floor(($avail - ($gap * ($cols - 1))) / $cols)
-            $flowW = $colW - (Px 14)
-
+            $colW = [Math]::Floor(($avail - ($gap * ($cols - 1))) / $cols)
             $colY = New-Object 'int[]' $cols
+
+            # Com o painel rolado, as coordenadas dos filhos sao relativas a posicao de rolagem.
+            $origin = $appsPanel.AutoScrollPosition
 
             foreach ($cat in $script:CatList) {
                 $visible = @($cat.Chips | Where-Object { $_.Tag.Show })
@@ -887,40 +1378,48 @@ public static extern bool SetProcessDPIAware();
                 }
                 $cat.Group.Visible = $true
 
-                # Simula a quebra de linha do FlowLayoutPanel com a mesma conta que ele usa
-                # (largura do controle + margem direita), para saber a altura exata.
-                $rows = 1
-                $x    = 0
-                foreach ($chip in $visible) {
-                    $w = $chip.Width + $chip.Margin.Right
-                    if ($x -gt 0 -and ($x + $w) -gt $flowW) { $rows++; $x = 0 }
-                    $x += $w
-                }
-                $flowH  = $rows * ($chipHeight + $chipGap)
-                $groupH = $flowH + $headerH + (Px 6)
+                $groupH = $catHeadH + ($visible.Count * $rowH) + (Px 8)
 
-                # coluna mais curta (empacotamento tipo masonry)
+                # coluna mais curta
                 $idx = 0
                 for ($i = 1; $i -lt $cols; $i++) {
                     if ($colY[$i] -lt $colY[$idx]) { $idx = $i }
                 }
 
-                $cat.Group.Location = New-Object Drawing.Point(($idx * ($colW + $gap)), $colY[$idx])
-                $cat.Group.Size     = New-Object Drawing.Size($colW, $groupH)
-                $cat.Flow.Location  = New-Object Drawing.Point((Px 8), $headerH)
-                $cat.Flow.Size      = New-Object Drawing.Size($flowW, $flowH)
+                $cat.Group.SetBounds((($idx * ($colW + $gap)) + $origin.X), ($colY[$idx] + $origin.Y), $colW, $groupH)
+                $cat.Count.Location = New-Object Drawing.Point(($colW - $cat.Count.PreferredWidth - (Px 14)), (Px 13))
+
+                $y = $catHeadH
+                foreach ($chip in $cat.Chips) {
+                    if ($chip.Tag.Show) {
+                        $chip.SetBounds((Px 6), $y, ($colW - (Px 12)), $rowH)
+                        $chip.Visible = $true
+                        $y += $rowH
+                    } else {
+                        $chip.Visible = $false
+                    }
+                }
 
                 $colY[$idx] = $colY[$idx] + $groupH + $gap
             }
 
-            # altura real ocupada pelas categorias: usada para dimensionar o divisor
             $tallest = 0
             foreach ($y in $colY) { if ($y -gt $tallest) { $tallest = $y } }
             $script:ContentHeight = [Math]::Max(0, $tallest - $gap)
         }
         finally {
             $appsPanel.ResumeLayout()
+            # Sem o PerformLayout explicito o painel continua com a area de rolagem do layout
+            # anterior (barras com tamanho errado e rolagem horizontal sem motivo).
+            $appsPanel.PerformLayout()
             $script:LayoutBusy = $false
+        }
+
+        # Se a barra de rolagem vertical apareceu (ou sumiu) por causa deste layout, a largura
+        # util mudou: refaz uma unica vez, senao sobraria uma rolagem horizontal.
+        if (-not $Retry -and ($appsPanel.ClientSize.Width - (Px 2)) -ne $avail) {
+            $script:LastWidth = $appsPanel.ClientSize.Width
+            Update-AppLayout -Retry
         }
     }
 
@@ -928,6 +1427,8 @@ public static extern bool SetProcessDPIAware();
     # (o script e baixado e avaliado por "irm | iex", onde qualquer byte acentuado vira lixo).
     $noiseChars = -join @(0x2588, 0x2592, 0x2591, 0x25CF, 0x00B7 | ForEach-Object { [char]$_ })
     $noiseRegex = '^[\s\-\\|/\.' + [regex]::Escape($noiseChars) + ']+$'
+    # Linha que contem blocos de barra junto com texto (ex.: barra + "12 MB / 95 MB").
+    $progressBarRegex = '[' + [regex]::Escape((-join @(0x2588, 0x2592, 0x2591 | ForEach-Object { [char]$_ }))) + ']'
 
     function Test-LogNoise {
         param([string]$Line)
@@ -1005,8 +1506,16 @@ public static extern bool SetProcessDPIAware();
         # Saida nativa de instaladores usa CR para redesenhar a mesma linha de progresso.
         # Atualize a linha atual em vez de criar uma linha nova para cada percentual.
         if ($Progress -and $null -ne $script:ProgressLineStart) {
-            $logBox.Select($script:ProgressLineStart, $logBox.TextLength - $script:ProgressLineStart)
-            $logBox.SelectedText = ''
+            # Mesmo cuidado de Limit-LogSize: com ReadOnly ligado a remocao e ignorada em
+            # silencio. Era por isso que cada percentual virava uma linha nova no registro.
+            $readOnlyAntes = $logBox.ReadOnly
+            $logBox.ReadOnly = $false
+            try {
+                $logBox.Select($script:ProgressLineStart, $logBox.TextLength - $script:ProgressLineStart)
+                $logBox.SelectedText = ''
+            } finally {
+                $logBox.ReadOnly = $readOnlyAntes
+            }
         } else {
             $logBox.SelectionStart = $logBox.TextLength
             $script:ProgressLineStart = $logBox.TextLength
@@ -1032,11 +1541,17 @@ public static extern bool SetProcessDPIAware();
 
     function Set-UiBusy {
         param([bool]$Busy)
-        $appsPanel.Enabled    = -not $Busy
-        $toolbar.Enabled      = -not $Busy
-        $toolsBox.Enabled     = -not $Busy
+        # So os controles de acao sao desligados (e nao os paineis inteiros): assim os titulos
+        # continuam legiveis e a lista segue rolavel. A busca tambem fica liberada, porque
+        # ela so filtra o que aparece.
+        foreach ($c in $script:AllChips)    { $c.Enabled = -not $Busy }
+        foreach ($b in $script:ToolButtons) { $b.Enabled = -not $Busy }
+        foreach ($b in @($selectDefaultButton, $selectAllButton, $deselectAllButton, $invertButton)) { $b.Enabled = -not $Busy }
         $installButton.Enabled= -not $Busy
         $cancelButton.Enabled = $Busy
+        $envQueueLabel.Text   = if ($Busy) { U 'em execu\u00e7\u00e3o' } else { 'parada' }
+        # Ao terminar, o Winget ou o Chocolatey podem ter acabado de ser instalados.
+        if (-not $Busy) { Update-EnvStatus }
         $mainForm.Cursor      = if ($Busy) { 'AppStarting' } else { 'Default' }
     }
 
@@ -1100,9 +1615,13 @@ public static extern bool SetProcessDPIAware();
                     $script:TaskFirstProblem = $clean.Trim()
                 }
 
-                # Alguns hosts convertem cada CR de uma ferramenta nativa em um objeto
-                # separado. O percentual permite reconhecer esses fragmentos tambem.
-                $isProgress = $progressFragment -or ($clean -match '(?i)\b\d{1,3}%')
+                # O PowerShell entrega cada redesenho por CR de uma ferramenta nativa como um
+                # objeto separado, ja sem o CR. Por isso o progresso tambem e reconhecido pelo
+                # conteudo: percentual, blocos de barra ou "baixado / total".
+                $isProgress = $progressFragment -or
+                              ($clean -match '\b\d{1,3}(?:[.,]\d+)?\s?%') -or
+                              ($clean -match $progressBarRegex) -or
+                              ($clean -match '(?i)\d\s*(?:B|KB|MB|GB)\s*/\s*[\d.,]+\s*(?:B|KB|MB|GB)\b')
                 if ($isProgress) { Write-Log $clean -Deferred -Progress }
                 else             { Write-Log $clean -Deferred }
             }
@@ -2189,11 +2708,19 @@ public static extern bool SetProcessDPIAware();
     })
     $searchHint.Add_Click({ $searchBox.Focus() })
 
+    # Este evento dispara no meio do layout do proprio painel, e nesse momento ele nao aceita
+    # recalcular a area de rolagem. Por isso o relayout e adiado para depois da mensagem atual.
     $appsPanel.Add_ClientSizeChanged({
-        if ($appsPanel.ClientSize.Width -ne $script:LastWidth) {
-            $script:LastWidth = $appsPanel.ClientSize.Width
+        if ($appsPanel.ClientSize.Width -eq $script:LastWidth) { return }
+        $script:LastWidth = $appsPanel.ClientSize.Width
+
+        if (-not $appsPanel.IsHandleCreated) { Update-AppLayout; return }
+        if ($script:LayoutQueued) { return }
+        $script:LayoutQueued = $true
+        [void]$appsPanel.BeginInvoke([Windows.Forms.MethodInvoker]{
+            $script:LayoutQueued = $false
             Update-AppLayout
-        }
+        })
     })
 
     # --- selecao ---
@@ -2354,30 +2881,27 @@ public static extern bool SetProcessDPIAware();
             ($wa.X + [int](($wa.Width  - $w) / 2)),
             ($wa.Y + [int](($wa.Height - $h) / 2)))
 
-        Update-AppLayout
-        Update-SelectionCount
-
-        # A divisoria e dimensionada pelo conteudo: a selecao recebe apenas a altura que precisa
-        # e o log fica com todo o resto (limitado a 62% para nao engolir o log em telas baixas).
+        # A coluna de execucao e registro fica com cerca de 40% da largura (no minimo 440 px);
+        # o resto vai para a pagina. O usuario pode arrastar a divisoria depois.
         try {
-            # altura exata: conteudo + barra de ferramentas + padding do painel + folga minima
-            $needed = $script:ContentHeight + $toolbar.Height + $split.Panel1.Padding.Vertical + (Px 6)
-            $min    = $split.Panel1MinSize
-            $max    = $split.Height - $split.Panel2MinSize - $split.SplitterWidth
-            $cap    = [int]($split.Height * 0.62)
-            $target = [Math]::Min($needed, $cap)
+            $execWidth = [Math]::Max((Px 440), [int]($split.Width * 0.40))
+            $min       = $split.Panel1MinSize
+            $max       = $split.Width - $split.Panel2MinSize - $split.SplitterWidth
+            $target    = $split.Width - $execWidth - $split.SplitterWidth
             if ($max -gt $min) {
                 $split.SplitterDistance = [Math]::Max($min, [Math]::Min($target, $max))
             }
         } catch { }
 
         Update-AppLayout
+        Update-SelectionCount
+        Update-EnvStatus
 
         Write-Log "$AppTitle v$AppVersion pronto." 'ok'
         Write-Log ('Ambiente: Winget {0} | Chocolatey {1}' -f
             $(if (Test-Tool 'winget') { 'OK' } else { 'ausente (sera instalado se necessario)' }),
             $(if (Test-Tool 'choco')  { 'OK' } else { 'ausente (sera instalado se necessario)' }))
-        Write-Log 'Selecione os programas e clique em INSTALAR SELECIONADOS. Arraste a divisoria para ampliar o log.'
+        Write-Log 'Selecione os programas e clique em INSTALAR. Arraste a divisoria entre os paineis para ampliar o registro.'
     })
 
     $mainForm.Add_FormClosing({
